@@ -1,4 +1,5 @@
-﻿using Spectre.Console;
+﻿using Microsoft.AspNetCore.StaticFiles;
+using Spectre.Console;
 
 const string SHARED_FOLDER = "E:\\SharedFolder";
 Directory.CreateDirectory(SHARED_FOLDER);
@@ -20,10 +21,12 @@ builder.Logging.AddProvider(new SpectreLoggerProvider());
 builder.Logging.SetMinimumLevel(LogLevel.Information);
 var app = builder.Build();
 
+var provider = new FileExtensionContentTypeProvider();
+
 app.MapGet("/files", (ILogger<Program> logger) =>
 {
   var files = Directory.GetFiles(SHARED_FOLDER);
-  var fileNames = files.Select(f => Path.GetFileName(f)).ToArray();
+  var fileNames = files.Select(Path.GetFileName).ToArray();
 
   logger.LogInformation("/files → {Count} file(s)", fileNames.Length);
   return fileNames;
@@ -31,17 +34,44 @@ app.MapGet("/files", (ILogger<Program> logger) =>
 
 app.MapGet("/download/{filename}", (string filename, ILogger<Program> logger) =>
 {
-  var path = Path.Combine(SHARED_FOLDER, filename);
+  var safeFileName = Path.GetFileName(filename);
+  var path = Path.Combine(SHARED_FOLDER, safeFileName);
 
   if (!File.Exists(path))
   {
-    logger.LogWarning("404 File not found: {Filename}", filename);
+    logger.LogWarning("404 File not found: {Filename}", safeFileName);
     return Results.NotFound();
   }
 
+  provider.TryGetContentType(path, out var contentType);
+  contentType ??= "application/octet-stream";
+
   var sizeKb = new FileInfo(path).Length / 1024;
-  logger.LogInformation("/download/{Filename} → {Size} KB", filename, sizeKb);
-  return Results.File(path);
+  logger.LogInformation("/download/{Filename} → {Size} KB", safeFileName, sizeKb);
+
+  return Results.File(path, contentType, fileDownloadName: safeFileName);
+});
+
+app.MapPost("/upload", async (HttpRequest request, ILogger<Program> logger) =>
+{
+  if (!request.HasFormContentType)
+    return Results.BadRequest("Invalid content type");
+
+  var form = await request.ReadFormAsync();
+  var file = form.Files["file"];
+
+  if (file is null || file.Length == 0)
+    return Results.BadRequest("No file uploaded");
+
+  var safeFileName = Path.GetFileName(file.FileName);
+  var filePath = Path.Combine(SHARED_FOLDER, safeFileName);
+
+  using var stream = File.Create(filePath);
+  await file.CopyToAsync(stream);
+
+  logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
+
+  return Results.Ok(new { file = safeFileName });
 });
 
 app.Run("http://0.0.0.0:5000");
