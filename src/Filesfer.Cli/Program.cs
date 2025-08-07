@@ -76,6 +76,7 @@ app.MapPost("/upload", async (HttpRequest request, ILogger<Program> logger) =>
 {
   try
   {
+    
     var form = await request.ReadFormAsync();
     var file = form.Files["file"];
 

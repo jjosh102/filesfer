@@ -40,7 +40,11 @@ class FileService {
   }
 
   Future<void> uploadFile(File file) async {
-    final uri = Uri.parse('http://10.0.2.2:5000/upload');
+    final uri = Uri.parse('$baseUrl/upload');
+
+    if (!file.existsSync()) {
+      throw Exception('File does not exist: ${file.path}');
+    }
 
     final request = http.MultipartRequest('POST', uri);
     request.files.add(await http.MultipartFile.fromPath('file', file.path));
