@@ -1,8 +1,6 @@
 # 📁 Filesfer
 
-**Filesfer** is a cross-platform file sharing app built with **Flutter** for the frontend and **ASP.NET Core** for the backend. It allows seamless file upload and download within a local network using a shared folder.
-
----
+**Filesfer** is a simple cross-platform app that lets you easily share files over your local network. It's built with Flutter on the front end and ASP.NET Core on the back end, making it easy to upload and download files through a shared folder.
 
 ## 🧩 Features
 
