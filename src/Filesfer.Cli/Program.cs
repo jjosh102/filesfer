@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.StaticFiles;
+﻿using System.IO.Compression;
+using Microsoft.AspNetCore.StaticFiles;
 using Spectre.Console;
 
 const string SHARED_FOLDER = "E:\\SharedFolder";
@@ -52,26 +53,49 @@ app.MapGet("/download/{filename}", (string filename, ILogger<Program> logger) =>
   return Results.File(path, contentType, fileDownloadName: safeFileName);
 });
 
+app.MapGet("/download-folder/{folder}", (string folder, ILogger<Program> logger) =>
+{
+  var safeFolder = Path.GetFileName(folder);
+  var fullFolderPath = Path.Combine(SHARED_FOLDER, safeFolder);
+
+  if (!Directory.Exists(fullFolderPath))
+  {
+    logger.LogWarning("404 Folder not found: {Folder}", safeFolder);
+    return Results.NotFound();
+  }
+
+  var tempZipPath = Path.Combine(Path.GetTempPath(), $"{safeFolder}_{Guid.NewGuid()}.zip");
+
+  ZipFile.CreateFromDirectory(fullFolderPath, tempZipPath);
+
+  logger.LogInformation("/download-folder/{Folder} → Sending zip", safeFolder);
+  return Results.File(tempZipPath, "application/zip", $"{safeFolder}.zip");
+});
+
 app.MapPost("/upload", async (HttpRequest request, ILogger<Program> logger) =>
 {
-  if (!request.HasFormContentType)
-    return Results.BadRequest("Invalid content type");
+  try
+  {
+    var form = await request.ReadFormAsync();
+    var file = form.Files["file"];
 
-  var form = await request.ReadFormAsync();
-  var file = form.Files["file"];
+    if (file is null || file.Length == 0)
+      return Results.BadRequest("No file uploaded");
 
-  if (file is null || file.Length == 0)
-    return Results.BadRequest("No file uploaded");
+    var safeFileName = Path.GetFileName(file.FileName);
+    var filePath = Path.Combine("E:\\SharedFolder", safeFileName);
 
-  var safeFileName = Path.GetFileName(file.FileName);
-  var filePath = Path.Combine(SHARED_FOLDER, safeFileName);
+    using var stream = File.Create(filePath);
+    await file.CopyToAsync(stream);
 
-  using var stream = File.Create(filePath);
-  await file.CopyToAsync(stream);
-
-  logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
-
-  return Results.Ok(new { file = safeFileName });
+    logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
+    return Results.Ok(new { file = safeFileName });
+  }
+  catch (Exception ex)
+  {
+    logger.LogError(ex, "Upload failed");
+    return Results.BadRequest("Exception: " + ex.Message);
+  }
 });
 
 app.Run("http://0.0.0.0:5000");
