@@ -53,6 +53,30 @@ app.MapGet("/download/{filename}", (string filename, ILogger<Program> logger) =>
   return Results.File(path, contentType, fileDownloadName: safeFileName);
 });
 
+// For streaming
+// app.MapGet("/download/{filename}", async (HttpContext context, string filename, ILogger<Program> logger) =>
+// {
+//   var safeFileName = Path.GetFileName(filename);
+//   var path = Path.Combine(SHARED_FOLDER, safeFileName);
+
+//   if (!File.Exists(path))
+//   {
+//     logger.LogWarning("404 File not found: {Filename}", safeFileName);
+//     return Results.NotFound();
+//   }
+
+//   provider.TryGetContentType(path, out var contentType);
+
+
+//   context.Response.ContentType = contentType ??= "application/octet-stream";
+//   context.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{safeFileName}\"");
+
+//   await using var stream = File.OpenRead(path);
+//   await stream.CopyToAsync(context.Response.Body);
+//   return Results.Ok();
+
+// });
+
 app.MapGet("/download-folder/{folder}", (string folder, ILogger<Program> logger) =>
 {
   var safeFolder = Path.GetFileName(folder);

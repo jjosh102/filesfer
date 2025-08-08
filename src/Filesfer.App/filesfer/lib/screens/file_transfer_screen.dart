@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:filesfer/providers/file_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:filesfer/extensions/time_ago.dart'; 
 
 class FileTransferScreen extends ConsumerStatefulWidget {
   const FileTransferScreen({super.key});
@@ -13,6 +14,7 @@ class FileTransferScreen extends ConsumerStatefulWidget {
 
 class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   bool _isRefreshing = false;
+  DateTime? _lastUpdated; 
 
   void _showSnack(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -28,7 +30,12 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     setState(() => _isRefreshing = true);
     ref.invalidate(fileListProvider);
     await Future.delayed(const Duration(milliseconds: 500));
-    if (mounted) setState(() => _isRefreshing = false);
+    if (mounted) {
+      setState(() {
+        _isRefreshing = false;
+        _lastUpdated = DateTime.now(); 
+      });
+    }
   }
 
   Future<void> _uploadSelectedFile() async {
@@ -126,6 +133,16 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                 ),
               ],
             ),
+            if (_lastUpdated != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Last updated ${_lastUpdated!.toTimeAgo()}',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Colors.grey),
+              ),
+            ],
             const SizedBox(height: 20),
             Expanded(
               child: AnimatedSwitcher(
@@ -136,69 +153,76 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                         data: (files) => files.isEmpty
                             ? const Center(child: Text('No files available'))
                             : viewMode
-                            ? ListView.separated(
-                                itemCount: files.length,
-                                separatorBuilder: (_, __) =>
-                                    const Divider(height: 1),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return ListTile(
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    leading: const Icon(
-                                      Icons.insert_drive_file,
-                                    ),
-                                    title: Text(filename),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.download),
-                                      onPressed: () => _downloadFile(filename),
-                                    ),
-                                  );
-                                },
-                              )
-                            : GridView.builder(
-                                itemCount: files.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                ? ListView.separated(
+                                    itemCount: files.length,
+                                    separatorBuilder: (_, __) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, index) {
+                                      final filename = files[index];
+                                      return ListTile(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                        ),
+                                        leading: const Icon(
+                                          Icons.insert_drive_file,
+                                        ),
+                                        title: Text(filename),
+                                        trailing: IconButton(
+                                          icon: const Icon(Icons.download),
+                                          onPressed: () =>
+                                              _downloadFile(filename),
+                                        ),
+                                      );
+                                    },
+                                  )
+                                : GridView.builder(
+                                    itemCount: files.length,
+                                    gridDelegate:
+                                        const SliverGridDelegateWithFixedCrossAxisCount(
                                       crossAxisCount: 2,
                                       crossAxisSpacing: 12,
                                       mainAxisSpacing: 12,
                                     ),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return Card(
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(16),
-                                      onTap: () => _downloadFile(filename),
-                                      child: Center(
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(12),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(
-                                                Icons.insert_drive_file,
-                                                size: 36,
+                                    itemBuilder: (context, index) {
+                                      final filename = files[index];
+                                      return Card(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                        ),
+                                        child: InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                          onTap: () =>
+                                              _downloadFile(filename),
+                                          child: Center(
+                                            child: Padding(
+                                              padding:
+                                                  const EdgeInsets.all(12),
+                                              child: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.insert_drive_file,
+                                                    size: 36,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    filename,
+                                                    maxLines: 2,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    textAlign: TextAlign.center,
+                                                  ),
+                                                ],
                                               ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                filename,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                textAlign: TextAlign.center,
-                                              ),
-                                            ],
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
+                                      );
+                                    },
+                                  ),
                         error: (_, __) => const Center(
                           child: Text(
                             'Unable to load files. Please try again later.',
