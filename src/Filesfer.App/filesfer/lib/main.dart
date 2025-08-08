@@ -1,3 +1,4 @@
+import 'package:filesfer/providers/file_provider.dart';
 import 'package:filesfer/screens/file_transfer_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,26 +7,26 @@ void main() {
   runApp(const ProviderScope(child: MyApp()));
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeMode = ref.watch(themeModeProvider); 
+
     return MaterialApp(
       title: 'Filesfer',
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(
-          0xFF0D1117,
-        ), 
-        cardColor: const Color(0xFF161B22), 
-        textTheme: ThemeData.dark().textTheme.apply(
-          bodyColor: Colors.white,
-          displayColor: Colors.white,
-        ),
-        chipTheme: ChipThemeData.fromDefaults(
-          secondaryColor: Colors.grey[800]!,
+      debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
           brightness: Brightness.dark,
-          labelStyle: const TextStyle(color: Colors.white),
         ),
       ),
       home: const FileTransferScreen(),
