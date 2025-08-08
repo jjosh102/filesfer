@@ -9,7 +9,7 @@ Directory.CreateDirectory(SHARED_FOLDER);
 AnsiConsole.Write(
     new FigletText("Filesfer")
         .Centered()
-        .Color(Color.Green));
+        .Color(Color.Blue3));
 
 AnsiConsole.MarkupLine("[bold yellow]Starting local file share API...[/]");
 
@@ -24,103 +24,127 @@ var app = builder.Build();
 
 var provider = new FileExtensionContentTypeProvider();
 
-app.MapGet("/files", (ILogger<Program> logger) =>
-{
-  var files = Directory.GetFiles(SHARED_FOLDER);
-  var fileNames = files.Select(Path.GetFileName).ToArray();
-
-  logger.LogInformation("/files → {Count} file(s)", fileNames.Length);
-  return fileNames;
-});
-
-app.MapGet("/download/{filename}", (string filename, ILogger<Program> logger) =>
-{
-  var safeFileName = Path.GetFileName(filename);
-  var path = Path.Combine(SHARED_FOLDER, safeFileName);
-
-  if (!File.Exists(path))
-  {
-    logger.LogWarning("404 File not found: {Filename}", safeFileName);
-    return Results.NotFound();
-  }
-
-  provider.TryGetContentType(path, out var contentType);
-  contentType ??= "application/octet-stream";
-
-  var sizeKb = new FileInfo(path).Length / 1024;
-  logger.LogInformation("/download/{Filename} → {Size} KB", safeFileName, sizeKb);
-
-  return Results.File(path, contentType, fileDownloadName: safeFileName);
-});
-
-// For streaming
-// app.MapGet("/download/{filename}", async (HttpContext context, string filename, ILogger<Program> logger) =>
-// {
-//   var safeFileName = Path.GetFileName(filename);
-//   var path = Path.Combine(SHARED_FOLDER, safeFileName);
-
-//   if (!File.Exists(path))
-//   {
-//     logger.LogWarning("404 File not found: {Filename}", safeFileName);
-//     return Results.NotFound();
-//   }
-
-//   provider.TryGetContentType(path, out var contentType);
-
-
-//   context.Response.ContentType = contentType ??= "application/octet-stream";
-//   context.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{safeFileName}\"");
-
-//   await using var stream = File.OpenRead(path);
-//   await stream.CopyToAsync(context.Response.Body);
-//   return Results.Ok();
-
-// });
-
-app.MapGet("/download-folder/{folder}", (string folder, ILogger<Program> logger) =>
-{
-  var safeFolder = Path.GetFileName(folder);
-  var fullFolderPath = Path.Combine(SHARED_FOLDER, safeFolder);
-
-  if (!Directory.Exists(fullFolderPath))
-  {
-    logger.LogWarning("404 Folder not found: {Folder}", safeFolder);
-    return Results.NotFound();
-  }
-
-  var tempZipPath = Path.Combine(Path.GetTempPath(), $"{safeFolder}_{Guid.NewGuid()}.zip");
-
-  ZipFile.CreateFromDirectory(fullFolderPath, tempZipPath);
-
-  logger.LogInformation("/download-folder/{Folder} → Sending zip", safeFolder);
-  return Results.File(tempZipPath, "application/zip", $"{safeFolder}.zip");
-});
-
-app.MapPost("/upload", async (HttpRequest request, ILogger<Program> logger) =>
+static async Task SafeExecuteAsync(
+    HttpContext context,
+    ILogger logger,
+    Func<HttpContext, Task> action,
+    string operation)
 {
   try
   {
-    
-    var form = await request.ReadFormAsync();
-    var file = form.Files["file"];
-
-    if (file is null || file.Length == 0)
-      return Results.BadRequest("No file uploaded");
-
-    var safeFileName = Path.GetFileName(file.FileName);
-    var filePath = Path.Combine("E:\\SharedFolder", safeFileName);
-
-    using var stream = File.Create(filePath);
-    await file.CopyToAsync(stream);
-
-    logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
-    return Results.Ok(new { file = safeFileName });
+    await action(context);
+  }
+  catch (DirectoryNotFoundException ex)
+  {
+    logger.LogError(ex, "Shared folder not found for {Operation}: {Folder}", operation, SHARED_FOLDER);
+    context.Response.StatusCode = StatusCodes.Status404NotFound;
+    await context.Response.WriteAsync($"Shared folder '{SHARED_FOLDER}' not found.");
+  }
+  catch (UnauthorizedAccessException ex)
+  {
+    logger.LogError(ex, "Access denied for {Operation} in folder: {Folder}", operation, SHARED_FOLDER);
+    context.Response.StatusCode = StatusCodes.Status403Forbidden;
   }
   catch (Exception ex)
   {
-    logger.LogError(ex, "Upload failed");
-    return Results.BadRequest("Exception: " + ex.Message);
+    logger.LogError(ex, "Unexpected error during {Operation} in {Folder}", operation, SHARED_FOLDER);
+    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+    await context.Response.WriteAsync("Internal server error.");
   }
-});
+}
+
+
+app.MapGet("/files", (HttpContext context, ILogger<Program> logger) =>
+    SafeExecuteAsync(context, logger, async ctx =>
+    {
+      var files = Directory.GetFiles(SHARED_FOLDER)
+          .Select(Path.GetFileName)
+          .ToArray();
+
+      ctx.Response.ContentType = "application/json";
+      await ctx.Response.WriteAsJsonAsync(files);
+    }, "list files")
+);
+
+app.MapGet("/download/{filename}", (HttpContext context, string filename, ILogger<Program> logger) =>
+    SafeExecuteAsync(context, logger, async ctx =>
+    {
+      var safeFileName = Path.GetFileName(filename);
+      var path = Path.Combine(SHARED_FOLDER, safeFileName);
+
+      if (!File.Exists(path))
+      {
+        logger.LogWarning("404 File not found: {Filename}", safeFileName);
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+      }
+
+      if (!provider.TryGetContentType(path, out var contentType))
+        contentType = "application/octet-stream";
+
+      var fileInfo = new FileInfo(path);
+      logger.LogInformation("/download/{Filename} → {Size} KB", safeFileName, fileInfo.Length / 1024);
+
+      ctx.Response.ContentType = contentType;
+      ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFileName}\"";
+      ctx.Response.ContentLength = fileInfo.Length;
+
+      await using var stream = File.OpenRead(path);
+      await stream.CopyToAsync(ctx.Response.Body, 81920, ctx.RequestAborted);
+    }, "download file")
+);
+
+app.MapGet("/download-folder/{folder}", (HttpContext context, string folder, ILogger<Program> logger) =>
+    SafeExecuteAsync(context, logger, async ctx =>
+    {
+      var safeFolder = Path.GetFileName(folder);
+      var fullFolderPath = Path.Combine(SHARED_FOLDER, safeFolder);
+
+      if (!Directory.Exists(fullFolderPath))
+      {
+        logger.LogWarning("404 Folder not found: {Folder}", safeFolder);
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+      }
+
+      var tempZipPath = Path.Combine(Path.GetTempPath(), $"{safeFolder}_{Guid.NewGuid()}.zip");
+      ZipFile.CreateFromDirectory(fullFolderPath, tempZipPath);
+
+      logger.LogInformation("/download-folder/{Folder} → Sending zip", safeFolder);
+
+      ctx.Response.ContentType = "application/zip";
+      ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFolder}.zip\"";
+      await using var zipStream = File.OpenRead(tempZipPath);
+      await zipStream.CopyToAsync(ctx.Response.Body, 81920, ctx.RequestAborted);
+
+      File.Delete(tempZipPath);
+    }, "download folder")
+);
+
+app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
+    SafeExecuteAsync(context, logger, async ctx =>
+    {
+      var form = await ctx.Request.ReadFormAsync();
+      var file = form.Files["file"];
+
+      if (file is null || file.Length == 0)
+      {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("No file uploaded");
+        return;
+      }
+
+      var safeFileName = Path.GetFileName(file.FileName);
+      var filePath = Path.Combine(SHARED_FOLDER, safeFileName);
+
+      await using var stream = File.Create(filePath);
+      await file.CopyToAsync(stream);
+
+      logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
+
+      ctx.Response.ContentType = "application/json";
+      await ctx.Response.WriteAsJsonAsync(new { file = safeFileName });
+    }, "upload file")
+);
 
 app.Run("http://0.0.0.0:5000");

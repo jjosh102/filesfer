@@ -3,7 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:filesfer/providers/file_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:filesfer/extensions/time_ago.dart'; 
+import 'package:filesfer/extensions/time_ago.dart';
 
 class FileTransferScreen extends ConsumerStatefulWidget {
   const FileTransferScreen({super.key});
@@ -14,7 +14,10 @@ class FileTransferScreen extends ConsumerStatefulWidget {
 
 class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   bool _isRefreshing = false;
-  DateTime? _lastUpdated; 
+  DateTime? _lastUpdated;
+
+ 
+  String? _progressMessage;
 
   void _showSnack(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -33,7 +36,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     if (mounted) {
       setState(() {
         _isRefreshing = false;
-        _lastUpdated = DateTime.now(); 
+        _lastUpdated = DateTime.now();
       });
     }
   }
@@ -53,10 +56,28 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         return;
       }
 
-      await service.uploadFile(file);
+      setState(() => _progressMessage = 'Uploading 0%');
+
+      await service.uploadFile(
+        file,
+        onProgress: (bytesSent, totalBytes) {
+          if (mounted) {
+            setState(() {
+              final percent = totalBytes > 0
+                  ? ((bytesSent / totalBytes) * 100).toStringAsFixed(1)
+                  : '...';
+              _progressMessage =
+                  'Uploading: $bytesSent / $totalBytes bytes ($percent%)';
+            });
+          }
+        },
+      );
+
+      setState(() => _progressMessage = null);
       await _refreshFiles();
       _showSnack('Upload successful');
     } catch (_) {
+      setState(() => _progressMessage = null);
       _showSnack(
         'Something went wrong while uploading. Please try again.',
         error: true,
@@ -73,9 +94,28 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         return;
       }
 
-      await service.downloadFile(filename, saveDir);
+      setState(() => _progressMessage = 'Downloading 0%');
+
+      await service.downloadFile(
+        filename,
+        saveDir,
+        onProgress: (bytesReceived, totalBytes) {
+          if (mounted) {
+            setState(() {
+              final percent = totalBytes > 0
+                  ? ((bytesReceived / totalBytes) * 100).toStringAsFixed(1)
+                  : '...';
+              _progressMessage =
+                  'Downloading: $bytesReceived / $totalBytes bytes ($percent%)';
+            });
+          }
+        },
+      );
+
+      setState(() => _progressMessage = null);
       _showSnack('File saved to $saveDir');
     } catch (_) {
+      setState(() => _progressMessage = null);
       _showSnack(
         'Failed to download file. Please check your connection.',
         error: true,
@@ -99,11 +139,10 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
               themeMode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode,
             ),
             onPressed: () {
-              ref
-                  .read(themeModeProvider.notifier)
-                  .state = themeMode == ThemeMode.dark
-                  ? ThemeMode.light
-                  : ThemeMode.dark;
+              ref.read(themeModeProvider.notifier).state =
+                  themeMode == ThemeMode.dark
+                      ? ThemeMode.light
+                      : ThemeMode.dark;
             },
           ),
           IconButton(
@@ -141,6 +180,15 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                     .textTheme
                     .bodySmall
                     ?.copyWith(color: Colors.grey),
+              ),
+            ],
+            if (_progressMessage != null) ...[
+              const SizedBox(height: 8),
+              LinearProgressIndicator(),
+              const SizedBox(height: 4),
+              Text(
+                _progressMessage!,
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
             const SizedBox(height: 20),

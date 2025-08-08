@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
-
 final httpClientProvider = Provider<http.Client>((ref) {
   final client = http.Client();
   ref.onDispose(() => client.close());
@@ -19,6 +18,10 @@ final fileListProvider = FutureProvider<List<String>>((ref) {
   return ref.read(fileServiceProvider).fetchFiles();
 });
 
+
+final downloadProgressProvider = StateProvider<double>((ref) => 0.0);
+
+final downloadedFileNameProvider = StateProvider<String?>((ref) => null);
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) {
   final brightness = WidgetsBinding.instance.platformDispatcher.platformBrightness;
