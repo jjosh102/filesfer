@@ -1,4 +1,5 @@
 ﻿using System.IO.Compression;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.StaticFiles;
 using Spectre.Console;
 
@@ -14,12 +15,21 @@ AnsiConsole.Write(
 AnsiConsole.MarkupLine("[bold yellow]Starting local file share API...[/]");
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+{
+  options.Limits.MaxRequestBodySize = null;
+  options.Limits.MaxResponseBufferSize = null;
+  options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(30);
+  options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(30);
+  options.Limits.MinRequestBodyDataRate = 
+        new MinDataRate(bytesPerSecond: 100, gracePeriod: TimeSpan.FromMinutes(30));
+  options.Limits.MaxRequestBodySize = 10737418240;  //10GB
+});
 
 builder.Logging.ClearProviders();
 
 builder.Logging.AddProvider(new SpectreLoggerProvider());
 
-builder.Logging.SetMinimumLevel(LogLevel.Information);
 var app = builder.Build();
 
 var provider = new FileExtensionContentTypeProvider();
@@ -45,6 +55,11 @@ static async Task SafeExecuteAsync(
     logger.LogError(ex, "Access denied for {Operation} in folder: {Folder}", operation, SHARED_FOLDER);
     context.Response.StatusCode = StatusCodes.Status403Forbidden;
   }
+  catch (OperationCanceledException)
+  {
+    logger.LogInformation("Request for {Operation} was canceled by the client.", operation);
+    context.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
+  }
   catch (Exception ex)
   {
     logger.LogError(ex, "Unexpected error during {Operation} in {Folder}", operation, SHARED_FOLDER);
@@ -52,6 +67,7 @@ static async Task SafeExecuteAsync(
     await context.Response.WriteAsync("Internal server error.");
   }
 }
+
 
 
 app.MapGet("/files", (HttpContext context, ILogger<Program> logger) =>
@@ -69,6 +85,8 @@ app.MapGet("/files", (HttpContext context, ILogger<Program> logger) =>
 app.MapGet("/download/{filename}", (HttpContext context, string filename, ILogger<Program> logger) =>
     SafeExecuteAsync(context, logger, async ctx =>
     {
+
+      logger.LogInformation("Request to download file: {Filename}", filename);
       var safeFileName = Path.GetFileName(filename);
       var path = Path.Combine(SHARED_FOLDER, safeFileName);
 
@@ -89,8 +107,7 @@ app.MapGet("/download/{filename}", (HttpContext context, string filename, ILogge
       ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFileName}\"";
       ctx.Response.ContentLength = fileInfo.Length;
 
-      await using var stream = File.OpenRead(path);
-      await stream.CopyToAsync(ctx.Response.Body, 81920, ctx.RequestAborted);
+      await ctx.Response.SendFileAsync(path, ctx.RequestAborted);
     }, "download file")
 );
 
@@ -124,7 +141,8 @@ app.MapGet("/download-folder/{folder}", (HttpContext context, string folder, ILo
 app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
     SafeExecuteAsync(context, logger, async ctx =>
     {
-      var form = await ctx.Request.ReadFormAsync();
+      context.RequestAborted.ThrowIfCancellationRequested();
+      var form = await ctx.Request.ReadFormAsync(context.RequestAborted);
       var file = form.Files["file"];
 
       if (file is null || file.Length == 0)

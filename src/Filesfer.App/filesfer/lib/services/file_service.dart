@@ -1,19 +1,19 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
-import 'package:http/http.dart' as http;
-
-const String baseUrl = 'http://10.0.2.2:5000';
+import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 
 class FileService {
-  final http.Client _client;
+  final Dio _dio;
 
-  FileService({required http.Client client}) : _client = client;
+  FileService({required Dio dio}) : _dio = dio;
+
   Future<List<String>> fetchFiles() async {
-    final response = await _client.get(Uri.parse('$baseUrl/files'));
+    final response = await _dio.get('/files');
     if (response.statusCode == 200) {
-      return List<String>.from(jsonDecode(response.body));
+      return List<String>.from(response.data);
     } else {
-      throw Exception('Failed to load file list- ${response.reasonPhrase}');
+      throw Exception('Failed to load file list: ${response.statusMessage}');
     }
   }
 
@@ -21,72 +21,64 @@ class FileService {
     String filename,
     String savePath, {
     required void Function(int bytesReceived, int totalBytes) onProgress,
+    required CancelToken cancelToken,
   }) async {
-    final request = http.Request(
-      'GET',
-      Uri.parse('$baseUrl/download/$filename'),
-    );
-
-    final response = await _client.send(request);
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to download file. Status: ${response.statusCode}',
-      );
-    }
-
-    final totalBytes = response.contentLength ?? 0;
-    int bytesReceived = 0;
-
-    final file = File('$savePath/$filename');
-    final sink = file.openWrite();
-
     try {
-      await for (final chunk in response.stream) {
-        bytesReceived += chunk.length;
-        sink.add(chunk);
-        onProgress(bytesReceived, totalBytes);
+      await _dio.download(
+        '/download/$filename',
+        '$savePath/$filename',
+        onReceiveProgress: onProgress,
+        cancelToken: cancelToken,
+        deleteOnError: true,
+        options: Options(
+          responseType: ResponseType.stream,
+          followRedirects: false,
+          receiveTimeout: const Duration(minutes: 5),
+          sendTimeout: const Duration(minutes: 5),
+        ),
+      );
+    } on DioException catch (e) {
+      debugPrint('❌ DioException: ${e.message}');
+      debugPrint('📦 Response: ${e.response}');
+
+      if (CancelToken.isCancel(e)) {
+        throw Exception('Download cancelled');
       }
+      throw Exception('Download failed: ${e.message ?? 'Unknown error'}');
     } catch (e) {
-      throw Exception('Download failed: $e');
-    } finally {
-      await sink.close();
+      debugPrint('❌ Unexpected error: $e');
+      rethrow;
     }
   }
 
   Future<void> uploadFile(
     File file, {
     required void Function(int bytesSent, int totalBytes) onProgress,
+    required CancelToken cancelToken,
   }) async {
-    final uri = Uri.parse('$baseUrl/upload');
-
     if (!file.existsSync()) {
       throw Exception('File does not exist: ${file.path}');
     }
 
-    final totalBytes = await file.length();
-    int bytesSent = 0;
-
-    final request = http.MultipartRequest('POST', uri);
-
-    request.files.add(
-      http.MultipartFile(
-        'file',
-        file.openRead().map((chunk) {
-          bytesSent += chunk.length;
-          onProgress(bytesSent, totalBytes);
-          return chunk;
-        }),
-        totalBytes,
+    final formData = FormData.fromMap({
+      'file': await MultipartFile.fromFile(
+        file.path,
         filename: file.path.split('/').last,
       ),
-    );
+    });
 
-    final response = await request.send();
-
-    if (response.statusCode != 200) {
-      final body = await response.stream.bytesToString();
-      throw Exception('Upload failed: ${response.statusCode}, body: $body');
+    try {
+      await _dio.post(
+        '/upload',
+        data: formData,
+        cancelToken: cancelToken,
+        onSendProgress: onProgress,
+      );
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) {
+        throw Exception('Upload cancelled');
+      }
+      throw Exception('Upload failed: ${e.message}');
     }
   }
 }

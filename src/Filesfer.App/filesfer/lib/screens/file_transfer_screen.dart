@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:filesfer/providers/file_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:filesfer/extensions/time_ago.dart';
+import 'package:filesfer/providers/file_provider.dart';
+import 'package:open_filex/open_filex.dart';
 
 class FileTransferScreen extends ConsumerStatefulWidget {
   const FileTransferScreen({super.key});
@@ -15,9 +17,10 @@ class FileTransferScreen extends ConsumerStatefulWidget {
 class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   bool _isRefreshing = false;
   DateTime? _lastUpdated;
+  String? _lastDownloadDir;
 
- 
-  String? _progressMessage;
+  final ValueNotifier<String> _progressMessage = ValueNotifier('');
+  final ValueNotifier<double?> _progressValue = ValueNotifier(null);
 
   void _showSnack(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -27,6 +30,55 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  void _showProgressBottomSheet(String title) {
+    _progressMessage.value = '$title 0%';
+    _progressValue.value = 0;
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<double?>(
+                valueListenable: _progressValue,
+                builder: (_, value, __) =>
+                    LinearProgressIndicator(value: value),
+              ),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<String>(
+                valueListenable: _progressMessage,
+                builder: (_, message, __) =>
+                    Text(message, style: Theme.of(context).textTheme.bodySmall),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () {
+                  ref.read(cancelTokenProvider).cancel('User cancelled');
+                  _hideProgressBottomSheet();
+                  _showSnack('Operation cancelled');
+                },
+                icon: const Icon(Icons.cancel),
+                label: const Text('Cancel'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _hideProgressBottomSheet() {
+    if (Navigator.canPop(context)) Navigator.pop(context);
   }
 
   Future<void> _refreshFiles() async {
@@ -41,85 +93,119 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     }
   }
 
+  String _getUniqueFilePath(String dir, String filename) {
+    final file = File('$dir/$filename');
+    if (!file.existsSync()) return file.path;
+
+    final name = filename.contains('.')
+        ? filename.substring(0, filename.lastIndexOf('.'))
+        : filename;
+    final ext = filename.contains('.')
+        ? filename.substring(filename.lastIndexOf('.'))
+        : '';
+    var counter = 1;
+
+    String newPath;
+    do {
+      newPath = '$dir/$name ($counter)$ext';
+      counter++;
+    } while (File(newPath).existsSync());
+
+    return newPath;
+  }
+
+  Future<void> _handleFileOperation({
+    required Future<void> Function(CancelToken cancelToken) action,
+    required String progressTitle,
+    required String successMessage,
+  }) async {
+    resetCancelToken(ref);
+    final cancelToken = ref.read(cancelTokenProvider);
+    try {
+      _showProgressBottomSheet(progressTitle);
+      await action(cancelToken);
+      _hideProgressBottomSheet();
+      _showSnack(successMessage);
+    } on DioException catch (e) {
+      _hideProgressBottomSheet();
+      if (CancelToken.isCancel(e)) return;
+      _showSnack('Network error: ${e.message}', error: true);
+    } catch (e) {
+      _hideProgressBottomSheet();
+      _showSnack('Unexpected error: $e', error: true);
+    }
+  }
+
   Future<void> _uploadSelectedFile() async {
     final service = ref.read(fileServiceProvider);
-    try {
-      final result = await FilePicker.platform.pickFiles();
-      if (result == null || result.files.single.path == null) {
-        _showSnack('No file selected', error: true);
-        return;
-      }
+    final result = await FilePicker.platform.pickFiles();
 
-      final file = File(result.files.single.path!);
-      if (!file.existsSync() || file.lengthSync() == 0) {
-        _showSnack('Please select a valid non-empty file', error: true);
-        return;
-      }
-
-      setState(() => _progressMessage = 'Uploading 0%');
-
-      await service.uploadFile(
-        file,
-        onProgress: (bytesSent, totalBytes) {
-          if (mounted) {
-            setState(() {
-              final percent = totalBytes > 0
-                  ? ((bytesSent / totalBytes) * 100).toStringAsFixed(1)
-                  : '...';
-              _progressMessage =
-                  'Uploading: $bytesSent / $totalBytes bytes ($percent%)';
-            });
-          }
-        },
-      );
-
-      setState(() => _progressMessage = null);
-      await _refreshFiles();
-      _showSnack('Upload successful');
-    } catch (_) {
-      setState(() => _progressMessage = null);
-      _showSnack(
-        'Something went wrong while uploading. Please try again.',
-        error: true,
-      );
+    if (result == null || result.files.single.path == null) {
+      _showSnack('No file selected', error: true);
+      return;
     }
+
+    final file = File(result.files.single.path!);
+    if (!file.existsSync() || file.lengthSync() == 0) {
+      _showSnack('Please select a valid non-empty file', error: true);
+      return;
+    }
+
+    await _handleFileOperation(
+      progressTitle: 'Uploading File',
+      successMessage: 'Upload successful',
+      action: (cancelToken) async {
+        await service.uploadFile(
+          file,
+          onProgress: (bytesSent, totalBytes) {
+            final percent = totalBytes > 0 ? bytesSent / totalBytes : 0.0;
+            _progressValue.value = percent;
+            _progressMessage.value =
+                'Uploading: $bytesSent / $totalBytes bytes (${(percent * 100).toStringAsFixed(1)}%)';
+          },
+          cancelToken: cancelToken,
+        );
+        await _refreshFiles();
+      },
+    );
   }
 
   Future<void> _downloadFile(String filename) async {
     final service = ref.read(fileServiceProvider);
-    try {
-      final saveDir = await FilePicker.platform.getDirectoryPath();
-      if (saveDir == null) {
-        _showSnack('Download cancelled', error: true);
-        return;
-      }
+    final saveDir = await FilePicker.platform.getDirectoryPath();
 
-      setState(() => _progressMessage = 'Downloading 0%');
+    if (saveDir == null) {
+      _showSnack('Download cancelled', error: true);
+      return;
+    }
 
-      await service.downloadFile(
-        filename,
-        saveDir,
-        onProgress: (bytesReceived, totalBytes) {
-          if (mounted) {
-            setState(() {
-              final percent = totalBytes > 0
-                  ? ((bytesReceived / totalBytes) * 100).toStringAsFixed(1)
-                  : '...';
-              _progressMessage =
-                  'Downloading: $bytesReceived / $totalBytes bytes ($percent%)';
-            });
-          }
-        },
-      );
+    final uniquePath = _getUniqueFilePath(saveDir, filename);
+    _lastDownloadDir = saveDir;
 
-      setState(() => _progressMessage = null);
-      _showSnack('File saved to $saveDir');
-    } catch (_) {
-      setState(() => _progressMessage = null);
-      _showSnack(
-        'Failed to download file. Please check your connection.',
-        error: true,
-      );
+    await _handleFileOperation(
+      progressTitle: 'Downloading File',
+      successMessage: 'File saved to $uniquePath',
+      action: (cancelToken) async {
+        await service.downloadFile(
+          filename,
+          saveDir,
+          onProgress: (bytesReceived, totalBytes) {
+            final percent = totalBytes > 0 ? bytesReceived / totalBytes : 0.0;
+            _progressValue.value = percent;
+            _progressMessage.value =
+                'Downloading: $bytesReceived / $totalBytes bytes (${(percent * 100).toStringAsFixed(1)}%)';
+          },
+          cancelToken: cancelToken,
+        );
+      },
+    );
+  }
+
+  void _openLastDownloadFolder() {
+    if (_lastDownloadDir != null) {
+      OpenFilex.open(_lastDownloadDir!);
+    } else {
+      _showSnack('No downloaded folder found.', error: true);
     }
   }
 
@@ -134,64 +220,87 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         title: const Text('Filesfer'),
         actions: [
           IconButton(
-            tooltip: 'Toggle Theme',
-            icon: Icon(
-              themeMode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode,
-            ),
-            onPressed: () {
-              ref.read(themeModeProvider.notifier).state =
-                  themeMode == ThemeMode.dark
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshFiles,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'theme':
+                  ref
+                      .read(themeModeProvider.notifier)
+                      .state = themeMode == ThemeMode.dark
                       ? ThemeMode.light
                       : ThemeMode.dark;
+                  break;
+                case 'view':
+                  ref.read(viewModeProvider.notifier).state = !viewMode;
+                  break;
+                case 'open':
+                  _openLastDownloadFolder();
+                  break;
+              }
             },
-          ),
-          IconButton(
-            tooltip: 'Toggle View',
-            icon: Icon(viewMode ? Icons.grid_view : Icons.list),
-            onPressed: () =>
-                ref.read(viewModeProvider.notifier).state = !viewMode,
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'theme',
+                child: Row(
+                  children: [
+                    Icon(
+                      themeMode == ThemeMode.dark
+                          ? Icons.light_mode
+                          : Icons.dark_mode,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('Toggle Theme'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'view',
+                child: Row(
+                  children: [
+                    Icon(viewMode ? Icons.list : Icons.grid_view),
+                    const SizedBox(width: 8),
+                    const Text('Toggle View'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'open',
+                child: Row(
+                  children: [
+                    Icon(Icons.folder_open),
+                    SizedBox(width: 8),
+                    Text('Open Downloads'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _uploadSelectedFile,
+        label: const Text('Upload'),
+        icon: const Icon(Icons.upload_file),
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         child: Column(
           children: [
-            Wrap(
-              spacing: 12,
-              children: [
-                FilledButton.icon(
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Upload'),
-                  onPressed: _uploadSelectedFile,
+            if (_lastUpdated != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Last updated ${_lastUpdated!.toTimeAgo()}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey),
                 ),
-                FilledButton.icon(
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh'),
-                  onPressed: _refreshFiles,
-                ),
-              ],
-            ),
-            if (_lastUpdated != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Last updated ${_lastUpdated!.toTimeAgo()}',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Colors.grey),
               ),
-            ],
-            if (_progressMessage != null) ...[
-              const SizedBox(height: 8),
-              LinearProgressIndicator(),
-              const SizedBox(height: 4),
-              Text(
-                _progressMessage!,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-            const SizedBox(height: 20),
             Expanded(
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 400),
@@ -201,76 +310,59 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                         data: (files) => files.isEmpty
                             ? const Center(child: Text('No files available'))
                             : viewMode
-                                ? ListView.separated(
-                                    itemCount: files.length,
-                                    separatorBuilder: (_, __) =>
-                                        const Divider(height: 1),
-                                    itemBuilder: (context, index) {
-                                      final filename = files[index];
-                                      return ListTile(
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        leading: const Icon(
-                                          Icons.insert_drive_file,
-                                        ),
-                                        title: Text(filename),
-                                        trailing: IconButton(
-                                          icon: const Icon(Icons.download),
-                                          onPressed: () =>
-                                              _downloadFile(filename),
-                                        ),
-                                      );
-                                    },
-                                  )
-                                : GridView.builder(
-                                    itemCount: files.length,
-                                    gridDelegate:
-                                        const SliverGridDelegateWithFixedCrossAxisCount(
+                            ? ListView.separated(
+                                itemCount: files.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (context, index) {
+                                  final filename = files[index];
+                                  return ListTile(
+                                    leading: const Icon(
+                                      Icons.insert_drive_file,
+                                    ),
+                                    title: Text(filename),
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.download),
+                                      onPressed: () => _downloadFile(filename),
+                                    ),
+                                  );
+                                },
+                              )
+                            : GridView.builder(
+                                itemCount: files.length,
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
                                       crossAxisCount: 2,
                                       crossAxisSpacing: 12,
                                       mainAxisSpacing: 12,
                                     ),
-                                    itemBuilder: (context, index) {
-                                      final filename = files[index];
-                                      return Card(
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                        ),
-                                        child: InkWell(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          onTap: () =>
-                                              _downloadFile(filename),
-                                          child: Center(
-                                            child: Padding(
-                                              padding:
-                                                  const EdgeInsets.all(12),
-                                              child: Column(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(
-                                                    Icons.insert_drive_file,
-                                                    size: 36,
-                                                  ),
-                                                  const SizedBox(height: 8),
-                                                  Text(
-                                                    filename,
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    textAlign: TextAlign.center,
-                                                  ),
-                                                ],
-                                              ),
+                                itemBuilder: (context, index) {
+                                  final filename = files[index];
+                                  return Card(
+                                    child: InkWell(
+                                      onTap: () => _downloadFile(filename),
+                                      child: Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.insert_drive_file,
+                                              size: 36,
                                             ),
-                                          ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              filename,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ],
                                         ),
-                                      );
-                                    },
-                                  ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                         error: (_, __) => const Center(
                           child: Text(
                             'Unable to load files. Please try again later.',
