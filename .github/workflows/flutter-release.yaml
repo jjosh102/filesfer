@@ -1,0 +1,109 @@
+
+name: Flutter Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  build_android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+
+      - name: Get Dependencies
+        run: cd src/Filesfer.App/filesfer && flutter pub get
+
+      - name: Build Android APK
+        run: cd src/Filesfer.App/filesfer && flutter build apk --release
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-android-release
+          path: src/Filesfer.App/filesfer/build/app/outputs/flutter-apk/app-release.apk
+
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+
+      - name: Get Dependencies
+        run: cd src/Filesfer.App/filesfer && flutter pub get
+
+      - name: Enable Windows Desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows Executable
+        run: cd src/Filesfer.App/filesfer && flutter build windows --release
+
+      - name: Upload Windows Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-windows-release
+          path: src/Filesfer.App/filesfer/build/windows/runner/Release/
+
+  build_macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+
+      - name: Get Dependencies
+        run: cd src/Filesfer.App/filesfer && flutter pub get
+
+      - name: Enable macOS Desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Build macOS Executable
+        run: cd src/Filesfer.App/filesfer && flutter build macos --release
+
+      - name: Upload macOS Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-macos-release
+          path: src/Filesfer.App/filesfer/build/macos/Build/Products/Release/
+
+
+  create_flutter_release:
+    runs-on: ubuntu-latest
+    needs: [build_android, build_windows, build_macos]
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+
+          name: Release ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          files: |
+            release-artifacts/flutter-android-release/app-release.apk:filesfer-android-${{ github.ref_name }}.apk
+            release-artifacts/flutter-windows-release/Filesfer.exe:filesfer-windows-${{ github.ref_name }}.exe
+            release-artifacts/flutter-macos-release/Filesfer.app:filesfer-macos-${{ github.ref_name }}.app
+        env:
+          GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN  }}
+

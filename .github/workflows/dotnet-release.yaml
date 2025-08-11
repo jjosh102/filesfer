@@ -1,0 +1,62 @@
+
+name: C# Console App Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  build_and_publish:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            runtime: linux-x64
+            archive_format: tar -czf
+            archive_extension: .tar.gz
+          - os: windows-latest
+            runtime: win-x64
+            archive_format: 7z a
+            archive_extension: .zip
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore src/Filesfer.Cli
+
+      - name: Publish Self-Contained Executable
+        run: dotnet publish src/Filesfer.Cli -c Release -r ${{ matrix.runtime }} --self-contained true
+
+      - name: Archive Published Output
+        id: archive
+        run: |
+          TAG_NAME=${{ github.ref_name }}
+          ARCHIVE_NAME="filesfer-cli-${TAG_NAME}-${{ matrix.runtime }}${{ matrix.archive_extension }}"
+          # Use the correct archiving command based on the OS.
+          # The -r flag for 7z is for recursive, and -tzip specifies zip format.
+          # The -C flag for tar changes directory to the source before archiving.
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            "${{ matrix.archive_format }}" "$ARCHIVE_NAME" "src/Filesfer.Cli/bin/Release/net9.0/${{ matrix.runtime }}/publish/*"
+            echo "::set-output name=archive_name::$ARCHIVE_NAME"
+          else
+            # Linux command
+            "${{ matrix.archive_format }}" "$ARCHIVE_NAME" -C "src/Filesfer.Cli/bin/Release/net9.0/${{ matrix.runtime }}/publish" .
+            echo "::set-output name=archive_name::$ARCHIVE_NAME"
+          fi
+          
+      - name: Create Release and Upload Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.archive.outputs.archive_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN  }}
