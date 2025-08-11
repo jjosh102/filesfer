@@ -6,9 +6,6 @@
 
 - 📤 Upload files from your device to a shared folder over LAN
 - 📥 Download files from the shared folder to your device
-- 🔄 Auto-refresh file list after upload
-- 📂 Built-in file picker
-- ✅ Upload validation (non-empty files only)
-- 🧪 Riverpod state management integration
+
 
 ---
