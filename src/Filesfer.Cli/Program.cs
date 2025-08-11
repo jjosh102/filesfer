@@ -29,7 +29,7 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Logging.ClearProviders();
 
 builder.Logging.AddProvider(new SpectreLoggerProvider());
-
+builder.Services.AddHealthChecks();
 var app = builder.Build();
 
 var provider = new FileExtensionContentTypeProvider();
@@ -164,5 +164,8 @@ app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
       await ctx.Response.WriteAsJsonAsync(new { file = safeFileName });
     }, "upload file")
 );
+
+
+app.MapHealthChecks("/health");
 
 app.Run("http://0.0.0.0:5000");

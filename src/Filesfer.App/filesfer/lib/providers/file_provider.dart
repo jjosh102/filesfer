@@ -42,3 +42,19 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) {
 });
 
 final viewModeProvider = StateProvider<bool>((ref) => true);
+
+final serverStatusStreamProvider = StreamProvider.autoDispose<bool>((
+  ref,
+) async* {
+  final service = ref.read(fileServiceProvider);
+
+  while (true) {
+    try {
+      final isUp = await service.isServerUp();
+      yield isUp;
+    } catch (_) {
+      yield false;
+    }
+    await Future.delayed(const Duration(seconds: 60));
+  }
+});

@@ -211,6 +211,33 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<bool>>(serverStatusStreamProvider, (prev, next) {
+      next.whenData((isUp) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
+            content: Row(
+              children: [
+                Icon(
+                  isUp ? Icons.cloud_done : Icons.cloud_off,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  isUp ? 'Server is online' : 'Server is unreachable',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        if (isUp) {
+          _refreshFiles(); 
+        }
+      });
+    });
     final fileListAsync = ref.watch(fileListProvider);
     final themeMode = ref.watch(themeModeProvider);
     final viewMode = ref.watch(viewModeProvider);

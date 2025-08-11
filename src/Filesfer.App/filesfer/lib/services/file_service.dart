@@ -81,4 +81,13 @@ class FileService {
       throw Exception('Upload failed: ${e.message}');
     }
   }
+
+  Future<bool> isServerUp() async {
+    try {
+      final response = await _dio.get('/health');
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 }
