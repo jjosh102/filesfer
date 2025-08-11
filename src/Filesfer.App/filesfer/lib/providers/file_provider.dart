@@ -1,10 +1,16 @@
 import 'package:filesfer/services/file_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 
 final baseUrlProvider = Provider<String>((ref) {
-  return 'http://10.0.2.2:5000';
+  if (kReleaseMode) {
+    return dotenv.env['PRODUCTION_API_URL']!;
+  } else {
+    return dotenv.env['DEV_API_URL']!;
+  }
 });
 
 final fileServiceProvider = Provider<FileService>((ref) {
@@ -30,10 +36,6 @@ void resetCancelToken(WidgetRef ref) {
 final fileListProvider = FutureProvider<List<String>>((ref) {
   return ref.read(fileServiceProvider).fetchFiles();
 });
-
-final downloadProgressProvider = StateProvider<double>((ref) => 0.0);
-final uploadedProgressProvider = StateProvider<double>((ref) => 0.0);
-final downloadedFileNameProvider = StateProvider<String?>((ref) => null);
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) {
   final brightness =

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:filesfer/extensions/time_ago.dart';
 import 'package:filesfer/providers/file_provider.dart';
@@ -93,29 +94,25 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     }
   }
 
-  String _getUniqueFilePath(String dir, String filename) {
-    final file = File('$dir/$filename');
-    if (!file.existsSync()) return file.path;
+  String _getUniqueFilePath(String directory, String filename) {
+    String newFilename = filename;
+    int copyNumber = 1;
 
-    final name = filename.contains('.')
-        ? filename.substring(0, filename.lastIndexOf('.'))
-        : filename;
-    final ext = filename.contains('.')
-        ? filename.substring(filename.lastIndexOf('.'))
-        : '';
-    var counter = 1;
+    final dotIndex = newFilename.lastIndexOf('.');
+    final nameWithoutExtension = (dotIndex != -1)
+        ? newFilename.substring(0, dotIndex)
+        : newFilename;
+    final extension = (dotIndex != -1) ? newFilename.substring(dotIndex) : '';
 
-    String newPath;
-    do {
-      newPath = '$dir/$name ($counter)$ext';
-      counter++;
-    } while (File(newPath).existsSync());
-
-    return newPath;
+    while (File('$directory/$newFilename').existsSync()) {
+      newFilename = '$nameWithoutExtension (copy $copyNumber)$extension';
+      copyNumber++;
+    }
+    return '$directory/$newFilename';
   }
 
   Future<void> _handleFileOperation({
-    required Future<void> Function(CancelToken cancelToken) action,
+    required Future<bool> Function(CancelToken cancelToken) action,
     required String progressTitle,
     required String successMessage,
   }) async {
@@ -123,9 +120,21 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     final cancelToken = ref.read(cancelTokenProvider);
     try {
       _showProgressBottomSheet(progressTitle);
-      await action(cancelToken);
+      final isSuccess = await action(cancelToken);
+      if (isSuccess) {
+        _showSnack(successMessage);
+      }
       _hideProgressBottomSheet();
-      _showSnack(successMessage);
+    } on PlatformException catch (e) {
+      _hideProgressBottomSheet();
+      if (e.message?.contains('No space left on device') ?? false) {
+        _showSnack(
+          'Not enough storage space. Please free up some space and try again.',
+          error: true,
+        );
+      } else {
+        _showSnack('An error occurred: ${e.message}', error: true);
+      }
     } on DioException catch (e) {
       _hideProgressBottomSheet();
       if (CancelToken.isCancel(e)) return;
@@ -140,12 +149,14 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     final service = ref.read(fileServiceProvider);
     final result = await FilePicker.platform.pickFiles();
 
-    if (result == null || result.files.single.path == null) {
+    if (result == null || result.files.first.path == null) {
       _showSnack('No file selected', error: true);
       return;
     }
 
-    final file = File(result.files.single.path!);
+    final filePath = result.files.first.path!;
+    final file = File(filePath);
+
     if (!file.existsSync() || file.lengthSync() == 0) {
       _showSnack('Please select a valid non-empty file', error: true);
       return;
@@ -155,7 +166,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
       progressTitle: 'Uploading File',
       successMessage: 'Upload successful',
       action: (cancelToken) async {
-        await service.uploadFile(
+        final isSuccess = await service.uploadFile(
           file,
           onProgress: (bytesSent, totalBytes) {
             final percent = totalBytes > 0 ? bytesSent / totalBytes : 0.0;
@@ -165,7 +176,10 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
           },
           cancelToken: cancelToken,
         );
-        await _refreshFiles();
+        if (isSuccess) {
+          await _refreshFiles();
+        }
+        return isSuccess;
       },
     );
   }
@@ -178,17 +192,16 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
       _showSnack('Download cancelled', error: true);
       return;
     }
-
     final uniquePath = _getUniqueFilePath(saveDir, filename);
+    debugPrint('Saving to: $uniquePath');
     _lastDownloadDir = saveDir;
-
     await _handleFileOperation(
       progressTitle: 'Downloading File',
       successMessage: 'File saved to $uniquePath',
       action: (cancelToken) async {
-        await service.downloadFile(
+        final isSuccess = await service.downloadFile(
           filename,
-          saveDir,
+          uniquePath,
           onProgress: (bytesReceived, totalBytes) {
             final percent = totalBytes > 0 ? bytesReceived / totalBytes : 0.0;
             _progressValue.value = percent;
@@ -197,6 +210,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
           },
           cancelToken: cancelToken,
         );
+        return isSuccess;
       },
     );
   }
@@ -211,33 +225,33 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<AsyncValue<bool>>(serverStatusStreamProvider, (prev, next) {
-      next.whenData((isUp) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
-            content: Row(
-              children: [
-                Icon(
-                  isUp ? Icons.cloud_done : Icons.cloud_off,
-                  color: Colors.white,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  isUp ? 'Server is online' : 'Server is unreachable',
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-        if (isUp) {
-          _refreshFiles(); 
-        }
-      });
-    });
+    // ref.listen<AsyncValue<bool>>(serverStatusStreamProvider, (prev, next) {
+    //   next.whenData((isUp) {
+    //     ScaffoldMessenger.of(context).showSnackBar(
+    //       SnackBar(
+    //         behavior: SnackBarBehavior.floating,
+    //         backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
+    //         content: Row(
+    //           children: [
+    //             Icon(
+    //               isUp ? Icons.cloud_done : Icons.cloud_off,
+    //               color: Colors.white,
+    //             ),
+    //             const SizedBox(width: 12),
+    //             Text(
+    //               isUp ? 'Server is online' : 'Server is unreachable',
+    //               style: const TextStyle(color: Colors.white),
+    //             ),
+    //           ],
+    //         ),
+    //         duration: const Duration(seconds: 2),
+    //       ),
+    //     );
+    //     if (isUp) {
+    //       _refreshFiles();
+    //     }
+    //   });
+    // });
     final fileListAsync = ref.watch(fileListProvider);
     final themeMode = ref.watch(themeModeProvider);
     final viewMode = ref.watch(viewModeProvider);

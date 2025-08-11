@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:flutter/material.dart';
 
 class FileService {
   final Dio _dio;
@@ -17,7 +16,7 @@ class FileService {
     }
   }
 
-  Future<void> downloadFile(
+  Future<bool> downloadFile(
     String filename,
     String savePath, {
     required void Function(int bytesReceived, int totalBytes) onProgress,
@@ -26,7 +25,7 @@ class FileService {
     try {
       await _dio.download(
         '/download/$filename',
-        '$savePath/$filename',
+        savePath,
         onReceiveProgress: onProgress,
         cancelToken: cancelToken,
         deleteOnError: true,
@@ -37,21 +36,18 @@ class FileService {
           sendTimeout: const Duration(minutes: 5),
         ),
       );
+      return true;
     } on DioException catch (e) {
-      debugPrint('❌ DioException: ${e.message}');
-      debugPrint('📦 Response: ${e.response}');
-
       if (CancelToken.isCancel(e)) {
-        throw Exception('Download cancelled');
+        return false;
       }
-      throw Exception('Download failed: ${e.message ?? 'Unknown error'}');
+      return false;
     } catch (e) {
-      debugPrint('❌ Unexpected error: $e');
-      rethrow;
+      return false;
     }
   }
 
-  Future<void> uploadFile(
+  Future<bool> uploadFile(
     File file, {
     required void Function(int bytesSent, int totalBytes) onProgress,
     required CancelToken cancelToken,
@@ -74,11 +70,12 @@ class FileService {
         cancelToken: cancelToken,
         onSendProgress: onProgress,
       );
+      return true;
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
-        throw Exception('Upload cancelled');
+        return false;
       }
-      throw Exception('Upload failed: ${e.message}');
+      return false;
     }
   }
 

@@ -1,10 +1,10 @@
 ﻿using System.IO.Compression;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 using Spectre.Console;
 
-const string SHARED_FOLDER = "E:\\SharedFolder";
-Directory.CreateDirectory(SHARED_FOLDER);
+
+
 
 
 AnsiConsole.Write(
@@ -21,10 +21,19 @@ builder.WebHost.ConfigureKestrel(options =>
   options.Limits.MaxResponseBufferSize = null;
   options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(30);
   options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(30);
-  options.Limits.MinRequestBodyDataRate = 
-        new MinDataRate(bytesPerSecond: 100, gracePeriod: TimeSpan.FromMinutes(30));
+  options.Limits.MinRequestBodyDataRate = null;
   options.Limits.MaxRequestBodySize = 10737418240;  //10GB
+
 });
+
+builder.Services.Configure<FormOptions>(options =>
+{
+  options.MultipartBodyLengthLimit = 10737418240; // 10 GB
+});
+
+builder.Configuration
+    .AddUserSecrets<Program>()
+    .AddEnvironmentVariables();
 
 builder.Logging.ClearProviders();
 
@@ -32,13 +41,24 @@ builder.Logging.AddProvider(new SpectreLoggerProvider());
 builder.Services.AddHealthChecks();
 var app = builder.Build();
 
+var sharedFolder = builder.Configuration["SharedFolderPath"];
+
+if (string.IsNullOrWhiteSpace(sharedFolder))
+{
+  throw new InvalidOperationException("Shared folder path is not configured.");
+}
+else
+{
+  Directory.CreateDirectory(sharedFolder);
+}
+
 var provider = new FileExtensionContentTypeProvider();
 
-static async Task SafeExecuteAsync(
-    HttpContext context,
-    ILogger logger,
-    Func<HttpContext, Task> action,
-    string operation)
+async Task SafeExecuteAsync(
+   HttpContext context,
+   ILogger logger,
+   Func<HttpContext, Task> action,
+   string operation)
 {
   try
   {
@@ -46,13 +66,13 @@ static async Task SafeExecuteAsync(
   }
   catch (DirectoryNotFoundException ex)
   {
-    logger.LogError(ex, "Shared folder not found for {Operation}: {Folder}", operation, SHARED_FOLDER);
+    logger.LogError(ex, "Shared folder not found for {Operation}: {Folder}", operation, sharedFolder);
     context.Response.StatusCode = StatusCodes.Status404NotFound;
-    await context.Response.WriteAsync($"Shared folder '{SHARED_FOLDER}' not found.");
+    await context.Response.WriteAsync($"Shared folder '{sharedFolder}' not found.");
   }
   catch (UnauthorizedAccessException ex)
   {
-    logger.LogError(ex, "Access denied for {Operation} in folder: {Folder}", operation, SHARED_FOLDER);
+    logger.LogError(ex, "Access denied for {Operation} in folder: {Folder}", operation, sharedFolder);
     context.Response.StatusCode = StatusCodes.Status403Forbidden;
   }
   catch (OperationCanceledException)
@@ -62,7 +82,7 @@ static async Task SafeExecuteAsync(
   }
   catch (Exception ex)
   {
-    logger.LogError(ex, "Unexpected error during {Operation} in {Folder}", operation, SHARED_FOLDER);
+    logger.LogError(ex, "Unexpected error during {Operation} in {Folder} {error}", operation, sharedFolder, ex.StackTrace);
     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
     await context.Response.WriteAsync("Internal server error.");
   }
@@ -73,7 +93,7 @@ static async Task SafeExecuteAsync(
 app.MapGet("/files", (HttpContext context, ILogger<Program> logger) =>
     SafeExecuteAsync(context, logger, async ctx =>
     {
-      var files = Directory.GetFiles(SHARED_FOLDER)
+      var files = Directory.GetFiles(sharedFolder)
           .Select(Path.GetFileName)
           .ToArray();
 
@@ -88,7 +108,7 @@ app.MapGet("/download/{filename}", (HttpContext context, string filename, ILogge
 
       logger.LogInformation("Request to download file: {Filename}", filename);
       var safeFileName = Path.GetFileName(filename);
-      var path = Path.Combine(SHARED_FOLDER, safeFileName);
+      var path = Path.Combine(sharedFolder, safeFileName);
 
       if (!File.Exists(path))
       {
@@ -115,7 +135,7 @@ app.MapGet("/download-folder/{folder}", (HttpContext context, string folder, ILo
     SafeExecuteAsync(context, logger, async ctx =>
     {
       var safeFolder = Path.GetFileName(folder);
-      var fullFolderPath = Path.Combine(SHARED_FOLDER, safeFolder);
+      var fullFolderPath = Path.Combine(sharedFolder, safeFolder);
 
       if (!Directory.Exists(fullFolderPath))
       {
@@ -139,30 +159,31 @@ app.MapGet("/download-folder/{folder}", (HttpContext context, string folder, ILo
 );
 
 app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
-    SafeExecuteAsync(context, logger, async ctx =>
+  SafeExecuteAsync(context, logger, async ctx =>
+  {
+    var form = await ctx.Request.ReadFormAsync(context.RequestAborted);
+    var file = form.Files["file"];
+
+    if (file is null || file.Length == 0)
     {
-      context.RequestAborted.ThrowIfCancellationRequested();
-      var form = await ctx.Request.ReadFormAsync(context.RequestAborted);
-      var file = form.Files["file"];
+      ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+      await ctx.Response.WriteAsync("No file uploaded");
+      return;
+    }
 
-      if (file is null || file.Length == 0)
-      {
-        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-        await ctx.Response.WriteAsync("No file uploaded");
-        return;
-      }
+    var safeFileName = Path.GetFileName(file.FileName);
+    var filePath = Path.Combine(sharedFolder, safeFileName);
 
-      var safeFileName = Path.GetFileName(file.FileName);
-      var filePath = Path.Combine(SHARED_FOLDER, safeFileName);
+    await using var fileStream = file.OpenReadStream();
+    await using var localStream = File.Create(filePath);
 
-      await using var stream = File.Create(filePath);
-      await file.CopyToAsync(stream);
+    await fileStream.CopyToAsync(localStream, ctx.RequestAborted);
 
-      logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
+    logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
 
-      ctx.Response.ContentType = "application/json";
-      await ctx.Response.WriteAsJsonAsync(new { file = safeFileName });
-    }, "upload file")
+    ctx.Response.ContentType = "application/json";
+    await ctx.Response.WriteAsJsonAsync(new { file = safeFileName });
+  }, "upload file")
 );
 
 
