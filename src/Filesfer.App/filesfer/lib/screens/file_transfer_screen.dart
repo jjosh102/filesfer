@@ -172,7 +172,6 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             _progressMessage.value =
                 'Uploading: $bytesSent / $totalBytes bytes (${(percent * 100).toStringAsFixed(1)}%)';
           },
-          onCancel: () {},
           isCancelled: () => _isCancelled,
         );
         if (isSuccess) {
