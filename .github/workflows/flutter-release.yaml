@@ -3,6 +3,7 @@ name: Flutter Release
 on:
   push:
     tags:
+   
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
@@ -95,8 +96,8 @@ jobs:
         run: |
           cd src/Filesfer.App/filesfer
           cat <<EOF > .env
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          API_KEY=${{ secrets.API_KEY }}
+          PRODUCTION_API_URL=${{ secrets.PRODUCTION_API_URL }}
+          DEV_API_URL=${{ secrets.DEV_API_URL }}
           NODE_ENV=production
           EOF
 
@@ -109,7 +110,6 @@ jobs:
           name: flutter-macos-release
           path: src/Filesfer.App/filesfer/build/macos/Build/Products/Release/
 
-
   create_flutter_release:
     runs-on: ubuntu-latest
     needs: [build_android, build_windows, build_macos]
@@ -118,13 +118,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           draft: true
           prerelease: false
+    
           files: |
             release-artifacts/flutter-android-release/app-release.apk:filesfer-android-${{ github.ref_name }}.apk
             release-artifacts/flutter-windows-release/Filesfer.exe:filesfer-windows-${{ github.ref_name }}.exe
