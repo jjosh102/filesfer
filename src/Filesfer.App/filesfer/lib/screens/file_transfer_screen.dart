@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:filesfer/extensions/time_ago.dart';
 import 'package:filesfer/providers/file_provider.dart';
 import 'package:open_filex/open_filex.dart';
+
 
 class FileTransferScreen extends ConsumerStatefulWidget {
   const FileTransferScreen({super.key});
@@ -19,6 +19,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   bool _isRefreshing = false;
   DateTime? _lastUpdated;
   String? _lastDownloadDir;
+  bool _isCancelled = false;
 
   final ValueNotifier<String> _progressMessage = ValueNotifier('');
   final ValueNotifier<double?> _progressValue = ValueNotifier(null);
@@ -52,8 +53,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
               const SizedBox(height: 12),
               ValueListenableBuilder<double?>(
                 valueListenable: _progressValue,
-                builder: (_, value, __) =>
-                    LinearProgressIndicator(value: value),
+                builder: (_, value, __) => LinearProgressIndicator(value: value),
               ),
               const SizedBox(height: 8),
               ValueListenableBuilder<String>(
@@ -64,7 +64,8 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
               const SizedBox(height: 8),
               ElevatedButton.icon(
                 onPressed: () {
-                  ref.read(cancelTokenProvider).cancel('User cancelled');
+                  // Cancel the operation
+                  _cancelOperation();
                   _hideProgressBottomSheet();
                   _showSnack('Operation cancelled');
                 },
@@ -81,6 +82,9 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   void _hideProgressBottomSheet() {
     if (Navigator.canPop(context)) Navigator.pop(context);
   }
+
+
+  void _cancelOperation() => _isCancelled = true;
 
   Future<void> _refreshFiles() async {
     setState(() => _isRefreshing = true);
@@ -99,9 +103,8 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     int copyNumber = 1;
 
     final dotIndex = newFilename.lastIndexOf('.');
-    final nameWithoutExtension = (dotIndex != -1)
-        ? newFilename.substring(0, dotIndex)
-        : newFilename;
+    final nameWithoutExtension =
+        (dotIndex != -1) ? newFilename.substring(0, dotIndex) : newFilename;
     final extension = (dotIndex != -1) ? newFilename.substring(dotIndex) : '';
 
     while (File('$directory/$newFilename').existsSync()) {
@@ -112,15 +115,14 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   }
 
   Future<void> _handleFileOperation({
-    required Future<bool> Function(CancelToken cancelToken) action,
+    required Future<bool> Function() action,
     required String progressTitle,
     required String successMessage,
   }) async {
-    resetCancelToken(ref);
-    final cancelToken = ref.read(cancelTokenProvider);
+    _isCancelled = false;
     try {
       _showProgressBottomSheet(progressTitle);
-      final isSuccess = await action(cancelToken);
+      final isSuccess = await action();
       if (isSuccess) {
         _showSnack(successMessage);
       }
@@ -135,10 +137,6 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
       } else {
         _showSnack('An error occurred: ${e.message}', error: true);
       }
-    } on DioException catch (e) {
-      _hideProgressBottomSheet();
-      if (CancelToken.isCancel(e)) return;
-      _showSnack('Network error: ${e.message}', error: true);
     } catch (e) {
       _hideProgressBottomSheet();
       _showSnack('Unexpected error: $e', error: true);
@@ -165,7 +163,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     await _handleFileOperation(
       progressTitle: 'Uploading File',
       successMessage: 'Upload successful',
-      action: (cancelToken) async {
+      action: () async {
         final isSuccess = await service.uploadFile(
           file,
           onProgress: (bytesSent, totalBytes) {
@@ -174,7 +172,8 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             _progressMessage.value =
                 'Uploading: $bytesSent / $totalBytes bytes (${(percent * 100).toStringAsFixed(1)}%)';
           },
-          cancelToken: cancelToken,
+          onCancel: () {},
+          isCancelled: () => _isCancelled,
         );
         if (isSuccess) {
           await _refreshFiles();
@@ -193,12 +192,12 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
       return;
     }
     final uniquePath = _getUniqueFilePath(saveDir, filename);
-    debugPrint('Saving to: $uniquePath');
     _lastDownloadDir = saveDir;
+
     await _handleFileOperation(
       progressTitle: 'Downloading File',
       successMessage: 'File saved to $uniquePath',
-      action: (cancelToken) async {
+      action: () async {
         final isSuccess = await service.downloadFile(
           filename,
           uniquePath,
@@ -206,9 +205,9 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             final percent = totalBytes > 0 ? bytesReceived / totalBytes : 0.0;
             _progressValue.value = percent;
             _progressMessage.value =
-                'Downloading: $bytesReceived / $totalBytes bytes (${(percent * 100).toStringAsFixed(1)}%)';
+                'Downloading: $bytesReceived bytes';
           },
-          cancelToken: cancelToken,
+          isCancelled: () => _isCancelled,
         );
         return isSuccess;
       },
@@ -225,33 +224,6 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ref.listen<AsyncValue<bool>>(serverStatusStreamProvider, (prev, next) {
-    //   next.whenData((isUp) {
-    //     ScaffoldMessenger.of(context).showSnackBar(
-    //       SnackBar(
-    //         behavior: SnackBarBehavior.floating,
-    //         backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
-    //         content: Row(
-    //           children: [
-    //             Icon(
-    //               isUp ? Icons.cloud_done : Icons.cloud_off,
-    //               color: Colors.white,
-    //             ),
-    //             const SizedBox(width: 12),
-    //             Text(
-    //               isUp ? 'Server is online' : 'Server is unreachable',
-    //               style: const TextStyle(color: Colors.white),
-    //             ),
-    //           ],
-    //         ),
-    //         duration: const Duration(seconds: 2),
-    //       ),
-    //     );
-    //     if (isUp) {
-    //       _refreshFiles();
-    //     }
-    //   });
-    // });
     final fileListAsync = ref.watch(fileListProvider);
     final themeMode = ref.watch(themeModeProvider);
     final viewMode = ref.watch(viewModeProvider);
@@ -270,11 +242,8 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             onSelected: (value) {
               switch (value) {
                 case 'theme':
-                  ref
-                      .read(themeModeProvider.notifier)
-                      .state = themeMode == ThemeMode.dark
-                      ? ThemeMode.light
-                      : ThemeMode.dark;
+                  ref.read(themeModeProvider.notifier).state =
+                      themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
                   break;
                 case 'view':
                   ref.read(viewModeProvider.notifier).state = !viewMode;
@@ -337,9 +306,10 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Last updated ${_lastUpdated!.toTimeAgo()}',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Colors.grey),
                 ),
               ),
             Expanded(
@@ -351,59 +321,59 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                         data: (files) => files.isEmpty
                             ? const Center(child: Text('No files available'))
                             : viewMode
-                            ? ListView.separated(
-                                itemCount: files.length,
-                                separatorBuilder: (_, __) =>
-                                    const Divider(height: 1),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return ListTile(
-                                    leading: const Icon(
-                                      Icons.insert_drive_file,
-                                    ),
-                                    title: Text(filename),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.download),
-                                      onPressed: () => _downloadFile(filename),
-                                    ),
-                                  );
-                                },
-                              )
-                            : GridView.builder(
-                                itemCount: files.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                ? ListView.separated(
+                                    itemCount: files.length,
+                                    separatorBuilder: (_, __) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, index) {
+                                      final filename = files[index];
+                                      return ListTile(
+                                        leading: const Icon(
+                                          Icons.insert_drive_file,
+                                        ),
+                                        title: Text(filename),
+                                        trailing: IconButton(
+                                          icon: const Icon(Icons.download),
+                                          onPressed: () => _downloadFile(filename),
+                                        ),
+                                      );
+                                    },
+                                  )
+                                : GridView.builder(
+                                    itemCount: files.length,
+                                    gridDelegate:
+                                        const SliverGridDelegateWithFixedCrossAxisCount(
                                       crossAxisCount: 2,
                                       crossAxisSpacing: 12,
                                       mainAxisSpacing: 12,
                                     ),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return Card(
-                                    child: InkWell(
-                                      onTap: () => _downloadFile(filename),
-                                      child: Center(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.insert_drive_file,
-                                              size: 36,
+                                    itemBuilder: (context, index) {
+                                      final filename = files[index];
+                                      return Card(
+                                        child: InkWell(
+                                          onTap: () => _downloadFile(filename),
+                                          child: Center(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                const Icon(
+                                                  Icons.insert_drive_file,
+                                                  size: 36,
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Text(
+                                                  filename,
+                                                  maxLines: 2,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  textAlign: TextAlign.center,
+                                                ),
+                                              ],
                                             ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              filename,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ],
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
+                                      );
+                                    },
+                                  ),
                         error: (_, __) => const Center(
                           child: Text(
                             'Unable to load files. Please try again later.',

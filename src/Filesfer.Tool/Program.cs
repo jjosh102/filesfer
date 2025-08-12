@@ -1,7 +1,7 @@
 ﻿using Filesfer.Tool;
 using Spectre.Console;
 
-string sharedFolder = Path.Combine(Environment.CurrentDirectory, "SharedFiles");
+string sharedFolder = @"E:\SharedFolder";
 var events = new List<string>();
 var server = new TcpServerService(sharedFolder);
 

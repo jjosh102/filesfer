@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -6,12 +7,12 @@ namespace Filesfer.Tool;
 
 public class TcpServerService : IDisposable
 {
-    private readonly List<TcpClient> _clients = [];
+    private readonly ConcurrentDictionary<TcpClient, bool> _clients = new();
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private readonly string _sharedFolder;
 
-    private readonly Dictionary<TcpClient, FileStream> _uploadStreams = [];
+    private readonly ConcurrentDictionary<TcpClient, FileStream> _uploadStreams = new();
 
     public bool IsRunning { get; private set; }
     public event Action<string>? OnEvent;
@@ -27,7 +28,7 @@ public class TcpServerService : IDisposable
         if (IsRunning) return;
 
         _cts = new CancellationTokenSource();
-        _listener = new TcpListener(IPAddress.Any, port);
+        _listener = new TcpListener(IPAddress.Any, 9000);
         _listener.Start();
         IsRunning = true;
 
@@ -42,14 +43,11 @@ public class TcpServerService : IDisposable
         _cts?.Cancel();
         _listener?.Stop();
 
-        lock (_clients)
+        foreach (var client in _clients.Keys)
         {
-            foreach (var client in _clients)
-            {
-                client.Close();
-            }
-            _clients.Clear();
+            client.Close();
         }
+        _clients.Clear();
 
         foreach (var fs in _uploadStreams.Values)
             fs.Dispose();
@@ -66,7 +64,7 @@ public class TcpServerService : IDisposable
             while (!token.IsCancellationRequested)
             {
                 var client = await _listener!.AcceptTcpClientAsync(token);
-                lock (_clients) _clients.Add(client);
+                _clients.TryAdd(client, true);
 
                 OnEvent?.Invoke($"Client connected: {client.Client.RemoteEndPoint}");
                 _ = HandleClientAsync(client, token);
@@ -82,99 +80,37 @@ public class TcpServerService : IDisposable
     private async Task HandleClientAsync(TcpClient client, CancellationToken token)
     {
         using var stream = client.GetStream();
-        var buffer = new byte[8192];
+        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
 
         try
         {
             while (!token.IsCancellationRequested)
             {
-                int bytesRead = await stream.ReadAsync(buffer, token);
-                if (bytesRead == 0) break;
-
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
+                // Read a single line to get the command
+                string? message = await reader.ReadLineAsync(token);
+                if (message == null) break;
 
                 if (message.StartsWith("UPLOAD_INIT|"))
                 {
-                    var fileName = message["UPLOAD_INIT|".Length..].Trim();
-                    var safeFileName = Path.GetFileName(fileName);
-                    var filePath = Path.Combine(_sharedFolder, safeFileName);
-
-      
-                    if (_uploadStreams.ContainsKey(client))
+                    var parts = message.Split('|');
+                    if (parts.Length != 3)
                     {
-                        _uploadStreams[client].Dispose();
-                        _uploadStreams.Remove(client);
-                    }
-
-                    var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-                    _uploadStreams[client] = fs;
-
-                    await SendAsync(stream, "UPLOAD_ACK");
-                    OnEvent?.Invoke($"Upload started: {safeFileName}");
-                }
-                else if (message.StartsWith("UPLOAD_CHUNK|"))
-                {
-                    if (!_uploadStreams.TryGetValue(client, out var fs))
-                    {
-                        await SendAsync(stream, "ERROR|Upload not initialized");
+                        await SendAsync(stream, "ERROR|Invalid UPLOAD_INIT command format");
                         continue;
                     }
 
-                    var base64Chunk = message["UPLOAD_CHUNK|".Length..];
-                    var chunkBytes = Convert.FromBase64String(base64Chunk);
-                    await fs.WriteAsync(chunkBytes, 0, chunkBytes.Length, token);
-                    await SendAsync(stream, "UPLOAD_CHUNK_ACK");
-                    OnEvent?.Invoke($"Received chunk ({chunkBytes.Length} bytes)");
-                }
-                else if (message == "UPLOAD_DONE")
-                {
-                    if (_uploadStreams.TryGetValue(client, out var fs))
-                    {
-                        await fs.FlushAsync(token);
-                        fs.Dispose();
-                        _uploadStreams.Remove(client);
-
-                        await SendAsync(stream, "UPLOAD_COMPLETE");
-                        OnEvent?.Invoke("Upload completed");
-                    }
-                    else
-                    {
-                        await SendAsync(stream, "ERROR|Upload not initialized");
-                    }
+                    var fileName = parts[1];
+                    var totalBytesToRead = long.Parse(parts[2]);
+                    await HandleUploadAsync(client, stream, fileName, totalBytesToRead, token);
                 }
                 else if (message.StartsWith("DOWNLOAD|"))
                 {
                     var fileName = message["DOWNLOAD|".Length..].Trim();
-                    var safeFileName = Path.GetFileName(fileName);
-                    var filePath = Path.Combine(_sharedFolder, safeFileName);
-
-                    if (!File.Exists(filePath))
-                    {
-                        await SendAsync(stream, "ERROR|File not found");
-                        continue;
-                    }
-
-                    await SendAsync(stream, "DOWNLOAD_START");
-
-                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, true);
-                    var readBuffer = new byte[8192];
-                    int read;
-
-                    while ((read = await fs.ReadAsync(readBuffer, token)) > 0)
-                    {
-                        var base64Chunk = Convert.ToBase64String(readBuffer, 0, read);
-                        await SendAsync(stream, "DOWNLOAD_CHUNK|" + base64Chunk);
-                    }
-
-                    await SendAsync(stream, "DOWNLOAD_DONE");
-                    OnEvent?.Invoke($"File sent: {safeFileName}");
+                    await HandleDownloadAsync(stream, fileName, token);
                 }
                 else if (message == "LIST")
                 {
-                    var files = Directory.GetFiles(_sharedFolder).Select(Path.GetFileName);
-                    var response = string.Join('|', files);
-                    await SendAsync(stream, "LIST|" + response);
-                    OnEvent?.Invoke("Sent file list");
+                    await HandleListAsync(stream);
                 }
                 else
                 {
@@ -190,18 +126,110 @@ public class TcpServerService : IDisposable
         }
         finally
         {
-            if (_uploadStreams.TryGetValue(client, out var fs))
+            if (_uploadStreams.TryRemove(client, out var fileStream))
             {
-                fs.Dispose();
-                _uploadStreams.Remove(client);
+                fileStream.Dispose();
             }
 
-            lock (_clients) _clients.Remove(client);
+            _clients.TryRemove(client, out _);
             client.Close();
             OnEvent?.Invoke($"Client disconnected: {client.Client.RemoteEndPoint}");
         }
     }
 
+    private async Task HandleUploadAsync(TcpClient client, NetworkStream stream, string fileName, long totalBytes, CancellationToken token)
+    {
+        var safeFileName = Path.GetFileName(fileName);
+        var filePath = Path.Combine(_sharedFolder, safeFileName);
+
+        FileStream? fs = null;
+        try
+        {
+            fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            _uploadStreams.TryAdd(client, fs);
+
+            await SendAsync(stream, "UPLOAD_ACK");
+            OnEvent?.Invoke($"Upload started: {safeFileName}, expecting {totalBytes} bytes");
+
+            var buffer = new byte[8192];
+            long bytesRead = 0;
+
+            while (bytesRead < totalBytes && !token.IsCancellationRequested)
+            {
+                int toRead = (int)Math.Min(buffer.Length, totalBytes - bytesRead);
+                int read = await stream.ReadAsync(buffer, 0, toRead, token);
+
+                if (read == 0) break; // Client disconnected
+
+                await fs.WriteAsync(buffer, 0, read, token);
+                bytesRead += read;
+            }
+
+            await fs.FlushAsync(token);
+            _uploadStreams.TryRemove(client, out _);
+            fs.Dispose();
+
+            if (bytesRead == totalBytes)
+            {
+                await SendAsync(stream, "UPLOAD_COMPLETE");
+                OnEvent?.Invoke("Upload completed successfully");
+            }
+            else
+            {
+                // If the loop broke before all bytes were read
+                File.Delete(filePath);
+                await SendAsync(stream, "ERROR|Upload incomplete, connection lost");
+                OnEvent?.Invoke("Upload failed due to incomplete data");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (fs != null)
+            {
+                fs.Dispose();
+                File.Delete(filePath);
+                _uploadStreams.TryRemove(client, out _);
+            }
+            await SendAsync(stream, $"ERROR|Upload failed: {ex.Message}");
+            OnEvent?.Invoke($"Upload error: {ex.Message}");
+        }
+    }
+    private async Task HandleDownloadAsync(NetworkStream stream, string fileName, CancellationToken token)
+    {
+        var safeFileName = Path.GetFileName(fileName);
+        var filePath = Path.Combine(_sharedFolder, safeFileName);
+
+        if (!File.Exists(filePath))
+        {
+            await SendAsync(stream, "ERROR|File not found");
+            return;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            await SendAsync(stream, $"DOWNLOAD_START|{fileInfo.Length}");
+
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, true);
+            await fs.CopyToAsync(stream, 8192, token);
+
+            await SendAsync(stream, "DOWNLOAD_DONE");
+            OnEvent?.Invoke($"File sent: {safeFileName}");
+        }
+        catch (Exception ex)
+        {
+            await SendAsync(stream, $"ERROR|Download failed: {ex.Message}");
+            OnEvent?.Invoke($"Download error: {ex.Message}");
+        }
+    }
+
+    private async Task HandleListAsync(NetworkStream stream)
+    {
+        var files = Directory.GetFiles(_sharedFolder).Select(Path.GetFileName);
+        var response = string.Join('|', files);
+        await SendAsync(stream, "LIST|" + response);
+        OnEvent?.Invoke("Sent file list");
+    }
     private static async Task SendAsync(NetworkStream stream, string message)
     {
         var msgBytes = Encoding.UTF8.GetBytes(message + "\n");
