@@ -106,53 +106,70 @@ class FileService {
 
     final completer = Completer<bool>();
     late StreamSubscription<String> sub;
-    late File file;
-    late IOSink sink;
-    int totalBytes = 0;
-    int bytesReceived = 0;
-    bool downloadStarted = false;
 
     sub = _responseController.stream.listen((msg) async {
-      if (isCancelled != null && isCancelled()) {
-        await sub.cancel();
-        completer.complete(false);
-        return;
-      }
-
       if (msg.startsWith('DOWNLOAD_START|')) {
-        totalBytes = int.parse(msg.substring('DOWNLOAD_START|'.length));
-        file = File(savePath);
-        sink = file.openWrite();
-        downloadStarted = true;
-      } else if (msg.startsWith('DOWNLOAD_CHUNK|')) {
-        if (downloadStarted) {
-          final bytes = base64Decode(msg.substring('DOWNLOAD_CHUNK|'.length));
-          sink.add(bytes);
-          bytesReceived += bytes.length;
-          onProgress(bytesReceived, totalBytes);
-        }
-      } else if (msg == 'DOWNLOAD_DONE') {
-        await sink.close();
+        final totalBytes = int.parse(msg.substring('DOWNLOAD_START|'.length));
         await sub.cancel();
-        completer.complete(true);
+
+        final file = File(savePath);
+        final sink = file.openWrite();
+        int bytesReceived = 0;
+
+        _socket!.listen(
+          (data) async {
+            if (isCancelled != null && isCancelled()) {
+              _socket!.close();
+              await sink.close();
+              completer.complete(false);
+              return;
+            }
+
+            sink.add(data);
+            bytesReceived += data.length;
+            onProgress(bytesReceived, totalBytes);
+
+            if (bytesReceived >= totalBytes) {
+              _socket!.listen(
+                (data) async {
+                  if (utf8.decode(data).trim() == 'DOWNLOAD_DONE') {
+                    await sink.close();
+                    completer.complete(true);
+                    _socket!.close();
+                  }
+                },
+                onDone: () =>
+                    completer.completeError('Connection closed prematurely'),
+                onError: (error) {
+                  sink.close();
+                  completer.completeError(error);
+                },
+              );
+            }
+          },
+          onError: (error) {
+            sink.close();
+            completer.completeError(error);
+          },
+        );
       } else if (msg.startsWith('ERROR|')) {
-        print('Download error: ${msg.substring('ERROR|'.length)}');
-        if (downloadStarted) await sink.close();
-        await sub.cancel();
-        completer.complete(false);
+        completer.completeError(
+          Exception('Server error: ${msg.substring('ERROR|'.length)}'),
+        );
+        sub.cancel();
       }
     });
 
-    _responseSubscription.add(sub);
+    _socket!.write('DOWNLOAD|$filename\n');
 
     try {
       return await completer.future.timeout(timeout);
     } on TimeoutException {
-      if (downloadStarted) await sink.close();
       await sub.cancel();
       throw TimeoutException('Download timed out.');
-    } finally {
-      _responseSubscription.remove(sub);
+    } on Exception {
+      await sub.cancel();
+      rethrow;
     }
   }
 
@@ -175,46 +192,62 @@ class FileService {
 
     late StreamSubscription<String> sub;
     sub = _responseController.stream.listen((msg) async {
-      if (msg == 'UPLOAD_ACK') {
-        final fileStream = file.openRead();
-        int bytesSent = 0;
-
-        await for (var chunk in fileStream) {
-          if (isCancelled != null && isCancelled()) {
-            _socket!.write('UPLOAD_CANCEL\n');
-            await sub.cancel();
-            onCancel(); 
-            completer.complete(false);
-            return;
-          }
-
-          _socket!.add(chunk);
-          bytesSent += chunk.length;
-          onProgress(bytesSent, totalBytes);
-        }
-
-        _socket!.write('UPLOAD_DONE\n');
-      } else if (msg == 'UPLOAD_COMPLETE') {
+      if (msg == 'UPLOAD_COMPLETE') {
         await sub.cancel();
         completer.complete(true);
       } else if (msg.startsWith('ERROR|')) {
         await sub.cancel();
-        completer.complete(false);
-        throw Exception(
-          'Server upload error: ${msg.substring('ERROR|'.length)}',
+        completer.completeError(
+          Exception('Server upload error: ${msg.substring('ERROR|'.length)}'),
         );
       }
     });
 
-    _responseSubscription.add(sub);
-
     try {
+      final ackCompleter = Completer<void>();
+      _responseController.stream
+          .firstWhere((msg) => msg == 'UPLOAD_ACK' || msg.startsWith('ERROR|'))
+          .then((msg) {
+            if (msg == 'UPLOAD_ACK') {
+              ackCompleter.complete();
+            } else {
+              ackCompleter.completeError(
+                Exception('Server rejected upload: $msg'),
+              );
+            }
+          });
+
+      await ackCompleter.future.timeout(timeout);
+
+      final fileStream = file.openRead();
+      int bytesSent = 0;
+
+      await for (var chunk in fileStream) {
+        if (isCancelled != null && isCancelled()) {
+          _socket!.write('UPLOAD_CANCEL\n');
+          onCancel();
+          throw Exception('Upload cancelled by user.');
+        }
+
+        _socket!.add(chunk);
+        bytesSent += chunk.length;
+        onProgress(bytesSent, totalBytes);
+
+        await _socket!.flush();
+      }
+
+
+      _socket!.write('UPLOAD_DONE\n');
+
       return await completer.future.timeout(timeout);
     } on TimeoutException {
       await sub.cancel();
       throw TimeoutException('Upload timed out.');
+    } on Exception catch (e) {
+      await sub.cancel();
+      rethrow;
     } finally {
-      _responseSubscription.remove(sub);
+      await sub.cancel();
     }
   }
 }

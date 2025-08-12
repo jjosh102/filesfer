@@ -8,6 +8,7 @@ var server = new TcpServerService(sharedFolder);
 server.OnEvent += msg =>
 {
     events.Add($"{DateTime.Now:HH:mm:ss} - {msg}");
+    AnsiConsole.MarkupLine($"[gray][[{DateTime.Now:T}]][/][yellow] {msg}[/]");
     if (events.Count > 50) events.RemoveAt(0);
 };
 

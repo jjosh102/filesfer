@@ -86,9 +86,8 @@ public class TcpServerService : IDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                // Read a single line to get the command
                 string? message = await reader.ReadLineAsync(token);
-                if (message == null) break;
+                if (message is null) break;
 
                 if (message.StartsWith("UPLOAD_INIT|"))
                 {
@@ -137,63 +136,77 @@ public class TcpServerService : IDisposable
         }
     }
 
-    private async Task HandleUploadAsync(TcpClient client, NetworkStream stream, string fileName, long totalBytes, CancellationToken token)
+    private async Task HandleUploadAsync(
+     TcpClient client,
+     NetworkStream stream,
+     string fileName,
+     long totalBytes,
+     CancellationToken token)
     {
         var safeFileName = Path.GetFileName(fileName);
         var filePath = Path.Combine(_sharedFolder, safeFileName);
 
-        FileStream? fs = null;
         try
         {
-            fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-            _uploadStreams.TryAdd(client, fs);
-
             await SendAsync(stream, "UPLOAD_ACK");
             OnEvent?.Invoke($"Upload started: {safeFileName}, expecting {totalBytes} bytes");
 
+            using var fs = new FileStream(
+                filePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 8192,
+                useAsync: true);
+
+            _uploadStreams[client] = fs;
+
             var buffer = new byte[8192];
-            long bytesRead = 0;
+            long bytesReadTotal = 0;
 
-            while (bytesRead < totalBytes && !token.IsCancellationRequested)
+            while (bytesReadTotal < totalBytes && !token.IsCancellationRequested)
             {
-                int toRead = (int)Math.Min(buffer.Length, totalBytes - bytesRead);
-                int read = await stream.ReadAsync(buffer, 0, toRead, token);
+                int toRead = (int)Math.Min(buffer.Length, totalBytes - bytesReadTotal);
+                int read = await stream.ReadAsync(buffer.AsMemory(0, toRead), token);
 
-                if (read == 0) break; // Client disconnected
+                if (read == 0) break;
 
-                await fs.WriteAsync(buffer, 0, read, token);
-                bytesRead += read;
+                await fs.WriteAsync(buffer.AsMemory(0, read), token);
+                bytesReadTotal += read;
             }
 
-            await fs.FlushAsync(token);
             _uploadStreams.TryRemove(client, out _);
-            fs.Dispose();
 
-            if (bytesRead == totalBytes)
+            if (bytesReadTotal == totalBytes && !token.IsCancellationRequested)
             {
+                await fs.FlushAsync(token);
                 await SendAsync(stream, "UPLOAD_COMPLETE");
                 OnEvent?.Invoke("Upload completed successfully");
             }
             else
             {
-                // If the loop broke before all bytes were read
+                fs.Close();
                 File.Delete(filePath);
-                await SendAsync(stream, "ERROR|Upload incomplete, connection lost");
-                OnEvent?.Invoke("Upload failed due to incomplete data");
+                await SendAsync(stream, "ERROR|Upload incomplete or canceled");
+                OnEvent?.Invoke("Upload failed (incomplete or canceled)");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            File.Delete(filePath);
+            _uploadStreams.TryRemove(client, out _);
+            await SendAsync(stream, "ERROR|Upload canceled");
+            OnEvent?.Invoke("Upload canceled");
         }
         catch (Exception ex)
         {
-            if (fs != null)
-            {
-                fs.Dispose();
-                File.Delete(filePath);
-                _uploadStreams.TryRemove(client, out _);
-            }
+            File.Delete(filePath);
+            _uploadStreams.TryRemove(client, out _);
             await SendAsync(stream, $"ERROR|Upload failed: {ex.Message}");
             OnEvent?.Invoke($"Upload error: {ex.Message}");
         }
     }
+
     private async Task HandleDownloadAsync(NetworkStream stream, string fileName, CancellationToken token)
     {
         var safeFileName = Path.GetFileName(fileName);
@@ -211,7 +224,14 @@ public class TcpServerService : IDisposable
             await SendAsync(stream, $"DOWNLOAD_START|{fileInfo.Length}");
 
             using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, true);
-            await fs.CopyToAsync(stream, 8192, token);
+            var buffer = new byte[8192];
+            int bytesRead;
+
+            while ((bytesRead = await fs.ReadAsync(buffer.AsMemory(0, buffer.Length), token)) > 0)
+            {
+                await stream.WriteAsync(buffer.AsMemory(0, bytesRead), token);
+                OnEvent?.Invoke($"Sent chunk ({bytesRead} bytes) of {safeFileName}");
+            }
 
             await SendAsync(stream, "DOWNLOAD_DONE");
             OnEvent?.Invoke($"File sent: {safeFileName}");
@@ -222,7 +242,6 @@ public class TcpServerService : IDisposable
             OnEvent?.Invoke($"Download error: {ex.Message}");
         }
     }
-
     private async Task HandleListAsync(NetworkStream stream)
     {
         var files = Directory.GetFiles(_sharedFolder).Select(Path.GetFileName);
