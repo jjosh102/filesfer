@@ -1,9 +1,9 @@
 import 'package:filesfer/services/file_service.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kReleaseMode;
+import 'package:shared_preferences/shared_preferences.dart';
 
 final baseUrlProvider = Provider<String>((ref) {
   if (kReleaseMode) {
@@ -37,11 +37,6 @@ final fileListProvider = FutureProvider<List<String>>((ref) {
   return ref.read(fileServiceProvider).fetchFiles();
 });
 
-final themeModeProvider = StateProvider<ThemeMode>((ref) {
-  final brightness =
-      WidgetsBinding.instance.platformDispatcher.platformBrightness;
-  return brightness == Brightness.dark ? ThemeMode.dark : ThemeMode.light;
-});
 
 final viewModeProvider = StateProvider<bool>((ref) => true);
 
@@ -59,4 +54,9 @@ final serverStatusStreamProvider = StreamProvider.autoDispose<bool>((
     }
     await Future.delayed(const Duration(seconds: 60));
   }
+});
+
+//initialize shared preferences during app startup
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  throw UnimplementedError();
 });

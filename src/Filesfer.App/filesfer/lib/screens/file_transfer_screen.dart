@@ -1,11 +1,12 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:filesfer/services/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:filesfer/extensions/time_ago.dart';
-import 'package:filesfer/providers/file_provider.dart';
+import 'package:filesfer/providers/providers.dart';
 import 'package:open_filex/open_filex.dart';
 
 class FileTransferScreen extends ConsumerStatefulWidget {
@@ -264,11 +265,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             onSelected: (value) {
               switch (value) {
                 case 'theme':
-                  ref
-                      .read(themeModeProvider.notifier)
-                      .state = themeMode == ThemeMode.dark
-                      ? ThemeMode.light
-                      : ThemeMode.dark;
+                   ref.read(themeModeProvider.notifier).toggleTheme();
                   break;
                 case 'view':
                   ref.read(viewModeProvider.notifier).state = !viewMode;
