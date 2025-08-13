@@ -8,14 +8,13 @@ class FileService {
   final Duration timeout;
 
   Socket? _socket;
-  final StreamController<String> _responseController =
-      StreamController<String>.broadcast();
-  final _responseSubscription = <StreamSubscription>[];
+  final StreamController<List<int>> _socketDataController =
+      StreamController<List<int>>.broadcast();
 
   FileService({
     required this.host,
     required this.port,
-    this.timeout = const Duration(seconds: 10),
+    this.timeout = const Duration(minutes: 10),
   });
 
   Future<void> _connect() async {
@@ -27,12 +26,7 @@ class FileService {
       _socket = await Socket.connect(host, port, timeout: timeout);
       _socket!.listen(
         (data) {
-          final messages = utf8.decode(data).split('\n');
-          for (var msg in messages) {
-            if (msg.isNotEmpty) {
-              _responseController.add(msg);
-            }
-          }
+          _socketDataController.add(data);
         },
         onDone: () {
           disconnect();
@@ -48,11 +42,6 @@ class FileService {
   }
 
   Future<void> disconnect() async {
-    for (var sub in _responseSubscription) {
-      await sub.cancel();
-    }
-    _responseSubscription.clear();
-
     if (_socket != null) {
       await _socket!.close();
       _socket = null;
@@ -63,8 +52,12 @@ class FileService {
     await _connect();
 
     final completer = Completer<List<String>>();
+    final controlMessageStream = _socketDataController.stream
+        .transform(Utf8Decoder())
+        .transform(const LineSplitter());
 
-    var sub = _responseController.stream.listen((msg) {
+    late StreamSubscription<String> sub;
+    sub = controlMessageStream.listen((msg) {
       if (msg.startsWith('LIST|')) {
         final fileList = msg.substring('LIST|'.length);
         completer.complete(fileList.isEmpty ? [] : fileList.split('|'));
@@ -75,21 +68,17 @@ class FileService {
       }
     });
 
-    _responseSubscription.add(sub);
     _socket!.write('LIST\n');
 
     try {
       final result = await completer.future.timeout(timeout);
       await sub.cancel();
-      _responseSubscription.remove(sub);
       return result;
     } on TimeoutException {
       await sub.cancel();
-      _responseSubscription.remove(sub);
       throw TimeoutException('Timeout while waiting for file list.');
     } on Exception catch (_) {
       await sub.cancel();
-      _responseSubscription.remove(sub);
       rethrow;
     }
   }
@@ -105,23 +94,28 @@ class FileService {
     final completer = Completer<bool>();
     final file = File(savePath);
     final sink = file.openWrite();
-    late StreamSubscription<String> sub;
 
-    sub = _responseController.stream.listen(
+    final controlMessageStream = _socketDataController.stream
+        .transform(Utf8Decoder())
+        .transform(const LineSplitter());
+    late StreamSubscription<String> controlMessageSubscription;
+
+    controlMessageSubscription = controlMessageStream.listen(
       (msg) async {
-        if (msg.startsWith('DOWNLOAD_START|')) {
-          await sub.cancel(); 
+        if (completer.isCompleted) return; 
 
+        if (msg.startsWith('DOWNLOAD_START|')) {
+          await controlMessageSubscription.cancel();
           final totalBytes = int.parse(msg.substring('DOWNLOAD_START|'.length));
           int bytesReceived = 0;
 
           try {
-           
-            await for (var chunk in _socket!) {
+            await for (var chunk in _socketDataController.stream) {
               if (isCancelled != null && isCancelled()) {
                 await sink.close();
-                _socket!.close();
-                completer.complete(false);
+                if (!completer.isCompleted) {
+                  completer.complete(false); 
+                }
                 return;
               }
 
@@ -131,27 +125,45 @@ class FileService {
 
               if (bytesReceived >= totalBytes) {
                 await sink.close();
-                break; 
+                break;
               }
             }
 
-            final doneMsg = await _responseController.stream.firstWhere(
-              (m) => m.startsWith('DOWNLOAD_DONE'),
-              orElse: () => 'ERROR|Connection closed prematurely',
-            );
+            final doneMsg = await controlMessageStream
+                .firstWhere(
+                  (m) =>
+                      m.startsWith('DOWNLOAD_DONE') || m.startsWith('ERROR|'),
+                  orElse: () => 'ERROR|Connection closed prematurely',
+                )
+                .timeout(timeout);
 
             if (doneMsg == 'DOWNLOAD_DONE') {
-              completer.complete(true);
+              if (!completer.isCompleted) {
+                completer.complete(true); 
+              }
             } else {
-              completer.completeError(Exception('Server error: $doneMsg'));
+              if (!completer.isCompleted) {
+                completer.completeError(
+                  Exception(
+                    'Server error: ${doneMsg.substring('ERROR|'.length)}',
+                  ),
+                );
+              }
             }
           } on Exception catch (e) {
             await sink.close();
-            completer.completeError(e);
+            if (!completer.isCompleted) {
+              completer.completeError(e); 
+            }
           }
         } else if (msg.startsWith('ERROR|')) {
-          completer.completeError(Exception(msg.substring('ERROR|'.length)));
-          await sub.cancel();
+          await controlMessageSubscription.cancel();
+          await sink.close();
+          if (!completer.isCompleted) {
+            completer.completeError(
+              Exception(msg.substring('ERROR|'.length)),
+            ); 
+          }
         }
       },
       onError: (error) {
@@ -161,7 +173,7 @@ class FileService {
       },
       onDone: () {
         if (!completer.isCompleted) {
-          completer.completeError(Exception('Connection closed prematurely.'));
+          completer.completeError(Exception('Connection closed unexpectedly.'));
         }
       },
     );
@@ -171,13 +183,16 @@ class FileService {
     try {
       return await completer.future.timeout(timeout);
     } on TimeoutException {
-      await sub.cancel();
-      await sink.close();
-      throw TimeoutException('Download timed out.');
-    } on Exception {
-      await sub.cancel();
-      await sink.close();
+      if (!completer.isCompleted) {
+        await controlMessageSubscription.cancel();
+        await sink.close();
+        completer.completeError(TimeoutException('Download timed out.'));
+      }
       rethrow;
+    } finally {
+      if (!completer.isCompleted) {
+        await controlMessageSubscription.cancel();
+      }
     }
   }
 
@@ -194,9 +209,13 @@ class FileService {
     final filename = file.uri.pathSegments.last;
     final totalBytes = await file.length();
     final completer = Completer<bool>();
-    late StreamSubscription<String> sub;
 
-    sub = _responseController.stream.listen(
+    final controlMessageStream = _socketDataController.stream
+        .transform(Utf8Decoder())
+        .transform(const LineSplitter());
+
+    late StreamSubscription<String> sub;
+    sub = controlMessageStream.listen(
       (msg) async {
         if (msg == 'UPLOAD_ACK') {
           try {
@@ -245,6 +264,15 @@ class FileService {
     _socket!.write('UPLOAD_INIT|$filename|$totalBytes\n');
 
     try {
+      final ackMessage = await controlMessageStream
+          .firstWhere((msg) => msg == 'UPLOAD_ACK' || msg.startsWith('ERROR|'))
+          .timeout(timeout);
+
+      if (ackMessage.startsWith('ERROR|')) {
+        await sub.cancel();
+        throw Exception(ackMessage.substring('ERROR|'.length));
+      }
+
       return await completer.future.timeout(timeout);
     } on TimeoutException {
       await sub.cancel();

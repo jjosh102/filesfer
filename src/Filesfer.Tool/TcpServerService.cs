@@ -7,12 +7,12 @@ namespace Filesfer.Tool;
 
 public class TcpServerService : IDisposable
 {
-    private readonly ConcurrentDictionary<TcpClient, bool> _clients = new();
+    private static readonly ConcurrentDictionary<TcpClient, bool> _clients = [];
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private readonly string _sharedFolder;
 
-    private readonly ConcurrentDictionary<TcpClient, FileStream> _uploadStreams = new();
+    private static readonly ConcurrentDictionary<TcpClient, FileStream> _uploadStreams = [];
 
     public bool IsRunning { get; private set; }
     public event Action<string>? OnEvent;
@@ -51,6 +51,8 @@ public class TcpServerService : IDisposable
 
         foreach (var fs in _uploadStreams.Values)
             fs.Dispose();
+
+
         _uploadStreams.Clear();
 
         IsRunning = false;
@@ -70,7 +72,10 @@ public class TcpServerService : IDisposable
                 _ = HandleClientAsync(client, token);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex)
+        {
+            OnEvent?.Invoke($"Error: {ex.Message}");
+        }
         catch (Exception ex)
         {
             OnEvent?.Invoke($"Error: {ex.Message}");

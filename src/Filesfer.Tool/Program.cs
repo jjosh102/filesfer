@@ -1,7 +1,12 @@
 ﻿using Filesfer.Tool;
 using Spectre.Console;
 
-string sharedFolder = @"E:\SharedFolder";
+var configBuilder = new ConfigurationBuilder()
+    .AddUserSecrets<Program>()
+    .AddEnvironmentVariables();
+
+var config = configBuilder.Build();
+var sharedFolder = config["SharedFolderPath"] ?? throw new InvalidOperationException("SharedFolderPath is not set in user secrets or environment variables.");
 var events = new List<string>();
 var server = new TcpServerService(sharedFolder);
 
