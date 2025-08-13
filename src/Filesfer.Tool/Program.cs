@@ -4,15 +4,9 @@ using Microsoft.AspNetCore.StaticFiles;
 using Spectre.Console;
 
 
-
-
-
-AnsiConsole.Write(
-    new FigletText("Filesfer")
-        .Centered()
-        .Color(Color.Blue3));
-
-AnsiConsole.MarkupLine("[bold yellow]Starting local file share API...[/]");
+var rule = new Rule("[yellow]Filesfer Tool[/]").RuleStyle("green").Centered();
+    AnsiConsole.Write(rule);
+    AnsiConsole.MarkupLine("[blue]Welcome to the Filesfer Server![/]");
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
