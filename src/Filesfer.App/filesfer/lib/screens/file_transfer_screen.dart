@@ -52,13 +52,12 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
               const SizedBox(height: 12),
               ValueListenableBuilder<double?>(
                 valueListenable: _progressValue,
-                builder: (_, value, __) =>
-                    LinearProgressIndicator(value: value),
+                builder: (_, value, _) => LinearProgressIndicator(value: value),
               ),
               const SizedBox(height: 8),
               ValueListenableBuilder<String>(
                 valueListenable: _progressMessage,
-                builder: (_, message, __) =>
+                builder: (_, message, _) =>
                     Text(message, style: Theme.of(context).textTheme.bodySmall),
               ),
               const SizedBox(height: 8),
@@ -226,31 +225,31 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
   @override
   Widget build(BuildContext context) {
     // ref.listen<AsyncValue<bool>>(serverStatusStreamProvider, (prev, next) {
-    //   next.whenData((isUp) {
-    //     ScaffoldMessenger.of(context).showSnackBar(
-    //       SnackBar(
-    //         behavior: SnackBarBehavior.floating,
-    //         backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
-    //         content: Row(
-    //           children: [
-    //             Icon(
-    //               isUp ? Icons.cloud_done : Icons.cloud_off,
-    //               color: Colors.white,
-    //             ),
-    //             const SizedBox(width: 12),
-    //             Text(
-    //               isUp ? 'Server is online' : 'Server is unreachable',
-    //               style: const TextStyle(color: Colors.white),
-    //             ),
-    //           ],
-    //         ),
-    //         duration: const Duration(seconds: 2),
-    //       ),
-    //     );
-    //     if (isUp) {
-    //       _refreshFiles();
-    //     }
-    //   });
+    //   next.whenData((isUp) {
+    //     ScaffoldMessenger.of(context).showSnackBar(
+    //       SnackBar(
+    //         behavior: SnackBarBehavior.floating,
+    //         backgroundColor: isUp ? Colors.green[600] : Colors.red[600],
+    //         content: Row(
+    //           children: [
+    //             Icon(
+    //               isUp ? Icons.cloud_done : Icons.cloud_off,
+    //               color: Colors.white,
+    //             ),
+    //             const SizedBox(width: 12),
+    //             Text(
+    //               isUp ? 'Server is online' : 'Server is unreachable',
+    //               style: const TextStyle(color: Colors.white),
+    //             ),
+    //           ],
+    //         ),
+    //         duration: const Duration(seconds: 2),
+    //       ),
+    //     );
+    //     if (isUp) {
+    //       _refreshFiles();
+    //     }
+    //   });
     // });
     final fileListAsync = ref.watch(fileListProvider);
     final themeMode = ref.watch(themeModeProvider);
@@ -260,11 +259,6 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
       appBar: AppBar(
         title: const Text('Filesfer'),
         actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshFiles,
-          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) {
@@ -328,93 +322,97 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         label: const Text('Upload'),
         icon: const Icon(Icons.upload_file),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            if (_lastUpdated != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Last updated ${_lastUpdated!.toTimeAgo()}',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: Colors.grey),
+      body: RefreshIndicator(
+        onRefresh: _refreshFiles,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            children: [
+              if (_lastUpdated != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Last updated ${_lastUpdated!.toTimeAgo()}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                  ),
                 ),
-              ),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 400),
-                child: _isRefreshing
-                    ? const Center(child: CircularProgressIndicator())
-                    : fileListAsync.when(
-                        data: (files) => files.isEmpty
-                            ? const Center(child: Text('No files available'))
-                            : viewMode
-                            ? ListView.separated(
-                                itemCount: files.length,
-                                separatorBuilder: (_, __) =>
-                                    const Divider(height: 1),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return ListTile(
-                                    leading: const Icon(
-                                      Icons.insert_drive_file,
-                                    ),
-                                    title: Text(filename),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.download),
-                                      onPressed: () => _downloadFile(filename),
-                                    ),
-                                  );
-                                },
-                              )
-                            : GridView.builder(
-                                itemCount: files.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: 2,
-                                      crossAxisSpacing: 12,
-                                      mainAxisSpacing: 12,
-                                    ),
-                                itemBuilder: (context, index) {
-                                  final filename = files[index];
-                                  return Card(
-                                    child: InkWell(
-                                      onTap: () => _downloadFile(filename),
-                                      child: Center(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.insert_drive_file,
-                                              size: 36,
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              filename,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ],
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 400),
+                  child: _isRefreshing
+                      ? const Center(child: CircularProgressIndicator())
+                      : fileListAsync.when(
+                          data: (files) => files.isEmpty
+                              ? const Center(child: Text('No files available'))
+                              : viewMode
+                              ? ListView.separated(
+                                  itemCount: files.length,
+                                  separatorBuilder: (_, __) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final filename = files[index];
+                                    return ListTile(
+                                      leading: const Icon(
+                                        Icons.insert_drive_file,
+                                      ),
+                                      title: Text(filename),
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.download),
+                                        onPressed: () =>
+                                            _downloadFile(filename),
+                                      ),
+                                    );
+                                  },
+                                )
+                              : GridView.builder(
+                                  itemCount: files.length,
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: 2,
+                                        crossAxisSpacing: 12,
+                                        mainAxisSpacing: 12,
+                                      ),
+                                  itemBuilder: (context, index) {
+                                    final filename = files[index];
+                                    return Card(
+                                      child: InkWell(
+                                        onTap: () => _downloadFile(filename),
+                                        child: Center(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(
+                                                Icons.insert_drive_file,
+                                                size: 36,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                filename,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                textAlign: TextAlign.center,
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                },
-                              ),
-                        error: (_, __) => const Center(
-                          child: Text(
-                            'Unable to load files. Please try again later.',
+                                    );
+                                  },
+                                ),
+                          error: (_, __) => const Center(
+                            child: Text(
+                              'Unable to load files. Please try again later.',
+                            ),
                           ),
+                          loading: () =>
+                              const Center(child: CircularProgressIndicator()),
                         ),
-                        loading: () =>
-                            const Center(child: CircularProgressIndicator()),
-                      ),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

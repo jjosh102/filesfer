@@ -1,5 +1,5 @@
 import 'package:filesfer/providers/file_provider.dart';
-import 'package:filesfer/screens/file_transfer_screen.dart';
+import 'package:filesfer/screens/splash_screen.dart'; 
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -40,7 +40,7 @@ class MyApp extends ConsumerWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const FileTransferScreen(),
+      home: const SplashScreen(), 
     );
   }
 }

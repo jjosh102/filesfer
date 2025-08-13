@@ -31,9 +31,6 @@ class FileService {
         deleteOnError: true,
         options: Options(
           responseType: ResponseType.stream,
-          followRedirects: false,
-          receiveTimeout: const Duration(minutes: 5),
-          sendTimeout: const Duration(minutes: 5),
         ),
       );
       return true;
