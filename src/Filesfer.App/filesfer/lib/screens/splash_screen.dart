@@ -19,12 +19,18 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 3), 
+      duration: const Duration(seconds: 4), 
     );
 
-    _animation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
+    _animation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(
+          0.0,
+          0.8, 
+          curve: Curves.elasticOut, 
+        ),
+      ),
     );
 
     _controller.forward();
@@ -33,7 +39,7 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   void _navigateToHome() async {
-    await Future.delayed(const Duration(seconds: 3), () {
+    await Future.delayed(const Duration(seconds: 5), () {
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
@@ -53,41 +59,21 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            AnimatedBuilder(
-              animation: _animation,
-              builder: (context, child) {
-                return Opacity(
-                  opacity: _animation.value, // Fade-in effect
-                  child: Transform.scale(
-                    scale: _animation.value * 1.2, // Scale-up effect
-                    child: child,
-                  ),
-                );
-              },
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.compare_arrows, 
-                    size: 100,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    'Filesfer',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        child: AnimatedBuilder(
+          animation: _animation,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _animation.value,
+              child: child,
+            );
+          },
+          child: Image.asset(
+            'assets/images/logo.png', 
+            width: 150,
+            height: 150,
+          ),
         ),
       ),
     );
