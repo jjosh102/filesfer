@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
+import 'package:filesfer/models/file_transfer.dart';
 import 'package:filesfer/providers/file_transfer_notifier.dart';
 import 'package:filesfer/services/theme_service.dart';
 import 'package:filesfer/widgets/transfer_progress_tile.dart';
@@ -95,7 +96,7 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
 
     if (saveDir == null) {
       _showSnack('Download cancelled', error: true);
-      return; 
+      return;
     }
 
     _lastDownloadDir = saveDir;
@@ -134,6 +135,52 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     }
   }
 
+  IconData _getFileIcon(String filename) {
+    final extension = filename.split('.').last.toLowerCase();
+    switch (extension) {
+      case 'pdf':
+        return Icons.picture_as_pdf;
+      case 'doc':
+      case 'docx':
+        return Icons.description;
+      case 'xls':
+      case 'xlsx':
+        return Icons.grid_on;
+      case 'ppt':
+      case 'pptx':
+        return Icons.slideshow;
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'bmp':
+        return Icons.image;
+      case 'mp4':
+      case 'mov':
+      case 'avi':
+      case 'mkv':
+        return Icons.video_file;
+      case 'mp3':
+      case 'wav':
+      case 'flac':
+        return Icons.audio_file;
+      case 'zip':
+      case 'rar':
+      case '7z':
+        return Icons.folder_zip;
+      case 'txt':
+        return Icons.text_snippet;
+      case 'dart':
+      case 'js':
+      case 'py':
+      case 'html':
+      case 'css':
+        return Icons.code;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final fileListAsync = ref.watch(fileListProvider);
@@ -141,6 +188,9 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
     final themeMode = ref.watch(themeModeProvider);
     final viewMode = ref.watch(viewModeProvider);
     final isSelecting = _selectedFiles.isNotEmpty;
+
+    final uploadTransfers = fileTransfers.where((t) => !t.isDownload).toList();
+    final downloadTransfers = fileTransfers.where((t) => t.isDownload).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -224,21 +274,17 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
         onRefresh: _refreshFiles,
         child: Column(
           children: [
-            if (fileTransfers.isNotEmpty)
-              Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Theme.of(context).dividerColor),
-                  ),
-                ),
-                child: ListView.builder(
-                  itemCount: fileTransfers.length,
-                  itemBuilder: (context, index) {
-                    final transfer = fileTransfers[index];
-                    return TransferProgressTile(transfer: transfer);
-                  },
-                ),
+            if (uploadTransfers.isNotEmpty)
+              _buildTransferSection(
+                title: 'Uploads',
+                transfers: uploadTransfers,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            if (downloadTransfers.isNotEmpty)
+              _buildTransferSection(
+                title: 'Downloads',
+                transfers: downloadTransfers,
+                color: Theme.of(context).colorScheme.secondary,
               ),
             Expanded(
               child: Padding(
@@ -266,95 +312,103 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
                                         child: Text('No files available'),
                                       )
                                     : viewMode
-                                    ? ListView.separated(
-                                        itemCount: files.length,
-                                        separatorBuilder: (_, __) =>
-                                            const Divider(height: 1),
-                                        itemBuilder: (context, index) {
-                                          final filename = files[index];
-                                          final isSelected = _selectedFiles
-                                              .contains(filename);
-                                          return ListTile(
-                                            onTap: () =>
-                                                _toggleFileSelection(filename),
-                                            leading: isSelected
-                                                ? const Icon(
-                                                    Icons.check_circle,
-                                                    color: Colors.blue,
-                                                  )
-                                                : const Icon(
-                                                    Icons.insert_drive_file,
+                                        ? ListView.separated(
+                                            itemCount: files.length,
+                                            separatorBuilder: (_, __) =>
+                                                const Divider(height: 1),
+                                            itemBuilder: (context, index) {
+                                              final filename = files[index];
+                                              final isSelected = _selectedFiles
+                                                  .contains(filename);
+                                              return ListTile(
+                                                onTap: () =>
+                                                    _toggleFileSelection(
+                                                        filename),
+                                                leading: isSelected
+                                                    ? const Icon(
+                                                        Icons.check_circle,
+                                                        color: Colors.blue,
+                                                      )
+                                                    : Icon(
+                                                        _getFileIcon(filename),
+                                                      ),
+                                                title: Text(filename),
+                                                trailing: IconButton(
+                                                  icon: const Icon(
+                                                    Icons.download,
                                                   ),
-                                            title: Text(filename),
-                                            trailing: IconButton(
-                                              icon: const Icon(Icons.download),
-                                              onPressed: () {
-                                                _toggleFileSelection(filename);
-                                                _downloadMultipleFiles();
-                                              },
-                                            ),
-                                          );
-                                        },
-                                      )
-                                    : GridView.builder(
-                                        itemCount: files.length,
-                                        gridDelegate:
-                                            const SliverGridDelegateWithFixedCrossAxisCount(
+                                                  onPressed: () {
+                                                    _toggleFileSelection(
+                                                        filename);
+                                                    _downloadMultipleFiles();
+                                                  },
+                                                ),
+                                              );
+                                            },
+                                          )
+                                        : GridView.builder(
+                                            itemCount: files.length,
+                                            gridDelegate:
+                                                const SliverGridDelegateWithFixedCrossAxisCount(
                                               crossAxisCount: 2,
                                               crossAxisSpacing: 12,
                                               mainAxisSpacing: 12,
                                             ),
-                                        itemBuilder: (context, index) {
-                                          final filename = files[index];
-                                          final isSelected = _selectedFiles
-                                              .contains(filename);
-                                          return Card(
-                                            color: isSelected
-                                                ? Theme.of(
-                                                    context,
-                                                  ).colorScheme.primaryContainer
-                                                : null,
-                                            child: InkWell(
-                                              onTap: () => _toggleFileSelection(
-                                                filename,
-                                              ),
-                                              child: Center(
-                                                child: Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Icon(
-                                                      Icons.insert_drive_file,
-                                                      size: 36,
-                                                      color: isSelected
-                                                          ? Theme.of(context)
-                                                                .colorScheme
-                                                                .onPrimaryContainer
-                                                          : null,
-                                                    ),
-                                                    const SizedBox(height: 8),
-                                                    Text(
-                                                      filename,
-                                                      maxLines: 2,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                      style: TextStyle(
-                                                        color: isSelected
-                                                            ? Theme.of(context)
+                                            itemBuilder: (context, index) {
+                                              final filename = files[index];
+                                              final isSelected = _selectedFiles
+                                                  .contains(filename);
+                                              return Card(
+                                                color: isSelected
+                                                    ? Theme.of(context)
+                                                        .colorScheme
+                                                        .primaryContainer
+                                                    : null,
+                                                child: InkWell(
+                                                  onTap: () =>
+                                                      _toggleFileSelection(
+                                                          filename),
+                                                  child: Center(
+                                                    child: Column(
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        Icon(
+                                                          _getFileIcon(filename),
+                                                          size: 36,
+                                                          color: isSelected
+                                                              ? Theme.of(
+                                                                      context)
                                                                   .colorScheme
                                                                   .onPrimaryContainer
-                                                            : null,
-                                                      ),
+                                                              : null,
+                                                        ),
+                                                        const SizedBox(
+                                                            height: 8),
+                                                        Text(
+                                                          filename,
+                                                          maxLines: 2,
+                                                          overflow:
+                                                              TextOverflow
+                                                                  .ellipsis,
+                                                          textAlign:
+                                                              TextAlign.center,
+                                                          style: TextStyle(
+                                                            color: isSelected
+                                                                ? Theme.of(
+                                                                        context)
+                                                                    .colorScheme
+                                                                    .onPrimaryContainer
+                                                                : null,
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ),
-                                                  ],
+                                                  ),
                                                 ),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
+                                              );
+                                            },
+                                          ),
                                 error: (_, __) => const Center(
                                   child: Text(
                                     'Unable to load files. Please try again later.',
@@ -372,6 +426,57 @@ class _FileTransferScreenState extends ConsumerState<FileTransferScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTransferSection({
+    required String title,
+    required List<FileTransfer> transfers,
+    required Color color,
+  }) {
+    if (transfers.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  title == 'Uploads'
+                      ? Icons.upload_file
+                      : Icons.download_for_offline,
+                  color: color,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall!.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 220, 
+            child: ListView.builder(
+              itemCount: transfers.length,
+              itemBuilder: (context, index) {
+                final transfer = transfers[index];
+                return TransferProgressTile(transfer: transfer);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
