@@ -1,19 +1,21 @@
 import 'package:filesfer/providers/providers.dart';
+import 'package:filesfer/screens/ip_input_screen.dart.dart';
 import 'package:filesfer/screens/splash_screen.dart';
 import 'package:filesfer/services/theme_service.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:filesfer/screens/file_transfer_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load(fileName: ".env");
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ],
       child: const MyApp(),
     ),
   );
@@ -44,7 +46,12 @@ class MyApp extends ConsumerWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const SplashScreen(),
+      initialRoute: '/splash',
+      routes: {
+        '/splash': (context) => const SplashScreen(), 
+        '/': (context) => const FileTransferScreen(),
+        '/ip-setup': (context) => const IpInputScreen(isInitial: true),
+      },
     );
   }
 }
