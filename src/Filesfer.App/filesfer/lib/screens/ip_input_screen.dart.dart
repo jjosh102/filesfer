@@ -1,5 +1,7 @@
 import 'package:filesfer/providers/ip_address_notifier.dart';
+import 'package:filesfer/providers/providers.dart';
 import 'package:filesfer/screens/file_transfer_screen.dart';
+import 'package:filesfer/screens/qr_scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -47,8 +49,23 @@ class _IpInputScreenState extends ConsumerState<IpInputScreen> {
     }
   }
 
+  void _scanQrCode() async {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const QRScannerScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<String?>(qrCodeProvider, (previous, next) {
+      if (next != null) {
+        _controller.text = next;
+        ref.read(qrCodeProvider.notifier).state = null;
+      }
+    });
+
     return PopScope(
       canPop: !widget.isInitial,
       child: Scaffold(
@@ -103,13 +120,7 @@ class _IpInputScreenState extends ConsumerState<IpInputScreen> {
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('QR code scanning coming soon!'),
-                      ),
-                    );
-                  },
+                  onPressed: _scanQrCode,
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('Scan QR Code'),
                   style: ElevatedButton.styleFrom(

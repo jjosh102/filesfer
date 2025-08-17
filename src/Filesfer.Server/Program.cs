@@ -1,12 +1,15 @@
-﻿using System.IO.Compression;
+﻿using System.Diagnostics;
+using System.IO.Compression;
+using System.Net;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
+using QRCoder;
 using Spectre.Console;
 
 
 var rule = new Rule("[yellow]Filesfer Tool[/]").RuleStyle("green").Centered();
-    AnsiConsole.Write(rule);
-    AnsiConsole.MarkupLine("[blue]Welcome to the Filesfer Server![/]");
+AnsiConsole.Write(rule);
+AnsiConsole.MarkupLine("[blue]Welcome to the Filesfer Server![/]");
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
@@ -44,6 +47,49 @@ if (string.IsNullOrWhiteSpace(sharedFolder))
 else
 {
   Directory.CreateDirectory(sharedFolder);
+}
+
+var port = 5000;
+var ip = GetLocalIPAddress();
+var url = $"http://{ip}:{port}";
+var qrFile = Path.Combine(AppContext.BaseDirectory, "qrcode.png");
+
+if (!File.Exists(qrFile))
+{
+  var qrGenerator = new QRCodeGenerator();
+  var qrCodeData = qrGenerator.CreateQrCode(url, QRCodeGenerator.ECCLevel.Q);
+  var qrCode = new PngByteQRCode(qrCodeData);
+  var qrBytes = qrCode.GetGraphic(20);
+  File.WriteAllBytes(qrFile, qrBytes);
+}
+
+AnsiConsole.MarkupLine($"\n[green]Server running at:[/] [blue]{url}[/]");
+AnsiConsole.MarkupLine($"[yellow]QR Code saved at:[/] {qrFile}");
+AnsiConsole.MarkupLine("[grey]Scan this QR with your phone to connect directly.[/]\n");
+
+var openQr = AnsiConsole.Confirm("[cyan]Would you like to open the QR code image now?[/]");
+
+if (openQr)
+{
+  try
+  {
+    if (OperatingSystem.IsWindows())
+      Process.Start(new ProcessStartInfo(qrFile) { UseShellExecute = true });
+    else if (OperatingSystem.IsMacOS())
+      Process.Start("open", qrFile);
+    else if (OperatingSystem.IsLinux())
+      Process.Start("xdg-open", qrFile);
+
+    AnsiConsole.MarkupLine("[green]QR code image opened successfully![/]");
+  }
+  catch (Exception ex)
+  {
+    AnsiConsole.MarkupLine($"[red]Failed to open QR code:[/] {ex.Message}");
+  }
+}
+else
+{
+  AnsiConsole.MarkupLine("[grey]You can open the QR code manually later if needed.[/]");
 }
 
 var provider = new FileExtensionContentTypeProvider();
@@ -184,3 +230,14 @@ app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
 app.MapHealthChecks("/health");
 
 app.Run("http://0.0.0.0:5000");
+
+static string GetLocalIPAddress()
+{
+  var host = Dns.GetHostEntry(Dns.GetHostName());
+  foreach (var ip in host.AddressList)
+  {
+    if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+      return ip.ToString();
+  }
+  return "127.0.0.1";
+}

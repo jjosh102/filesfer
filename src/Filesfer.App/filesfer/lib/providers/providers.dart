@@ -38,3 +38,4 @@ final fileListProvider = FutureProvider.autoDispose<List<String>>((ref) {
 });
 
 final viewModeProvider = StateProvider<bool>((ref) => true);
+final qrCodeProvider = StateProvider<String?>((ref) => null);
