@@ -1,6 +1,7 @@
-using Microsoft.Extensions.Logging;
+
 using Spectre.Console;
 
+namespace Filesfer.Cli;
 public class SpectreLoggerProvider : ILoggerProvider
 {
   public ILogger CreateLogger(string categoryName) => new SpectreLogger(categoryName);

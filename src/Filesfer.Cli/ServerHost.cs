@@ -1,4 +1,5 @@
-using System.IO.Compression;
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 
@@ -6,51 +7,67 @@ namespace Filesfer.Cli;
 
 public interface IServerHost
 {
-  Task StartAsync(int port, string folder, CancellationToken token = default);
+  bool IsRunning { get; }
+  string? Url { get; }
+  string CurrentStoragePath { get; }
+
+  Task StartAsync(CancellationToken token = default);
+  Task StopAsync();
 }
 
 public class ServerHost : IServerHost
 {
-  public async Task StartAsync(int port, string folder, CancellationToken token = default)
+  private WebApplication? _app;
+  private Task? _serverTask;
+  private CancellationTokenSource? _cts;
+
+  public bool IsRunning { get; private set; }
+  public string? Url { get; private set; }
+  public string CurrentStoragePath { get; private set; } = string.Empty;
+
+  private readonly int _port;
+  private readonly string _defaultFolder;
+
+  public ServerHost(int port = 5000, string? folder = null)
   {
+    _port = port;
+    _defaultFolder = folder ??
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+  }
+
+  public async Task StartAsync(CancellationToken token = default)
+  {
+    if (IsRunning)
+      return;
+
+    if (IsPortInUse(_port))
+      throw new InvalidOperationException($"Port {_port} is already in use.");
+
+    _cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.ConfigureKestrel(options =>
     {
-      options.Limits.MaxRequestBodySize = null;
-      options.Limits.MaxResponseBufferSize = null;
+      options.Limits.MaxRequestBodySize = 10L * 1024 * 1024 * 1024; // 10GB
       options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(30);
       options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(30);
-      options.Limits.MinRequestBodyDataRate = null;
-      options.Limits.MaxRequestBodySize = 10737418240;  //10GB
-      options.ListenAnyIP(port);
-
+      options.ListenAnyIP(_port);
     });
 
     builder.Services.Configure<FormOptions>(options =>
     {
-      options.MultipartBodyLengthLimit = 10737418240; // 10 GB
+      options.MultipartBodyLengthLimit = 10L * 1024 * 1024 * 1024; // 10 GB
     });
 
-    builder.Configuration
-        .AddUserSecrets<Program>()
-        .AddEnvironmentVariables();
 
-    // builder.Logging.ClearProviders();
-
-    // builder.Logging.AddProvider(new SpectreLoggerProvider());
+    builder.Logging.ClearProviders();
+    builder.Logging.AddProvider(new SpectreLoggerProvider());
     builder.Services.AddHealthChecks();
-    var app = builder.Build();
 
-    var sharedFolder = folder;
+    _app = builder.Build();
 
-    if (string.IsNullOrWhiteSpace(sharedFolder))
-    {
-      throw new InvalidOperationException("Shared folder path is not configured.");
-    }
-    else
-    {
-      Directory.CreateDirectory(sharedFolder);
-    }
+    CurrentStoragePath = _defaultFolder;
+    Directory.CreateDirectory(CurrentStoragePath);
 
     var provider = new FileExtensionContentTypeProvider();
 
@@ -64,56 +81,47 @@ public class ServerHost : IServerHost
       {
         await action(context);
       }
-      catch (DirectoryNotFoundException ex)
+      catch (Exception ex) when (ex is DirectoryNotFoundException ||
+                                 ex is UnauthorizedAccessException ||
+                                 ex is OperationCanceledException)
       {
-        logger.LogError(ex, "Shared folder not found for {Operation}: {Folder}", operation, sharedFolder);
-        context.Response.StatusCode = StatusCodes.Status404NotFound;
-        await context.Response.WriteAsync($"Shared folder '{sharedFolder}' not found.");
-      }
-      catch (UnauthorizedAccessException ex)
-      {
-        logger.LogError(ex, "Access denied for {Operation} in folder: {Folder}", operation, sharedFolder);
-        context.Response.StatusCode = StatusCodes.Status403Forbidden;
-      }
-      catch (OperationCanceledException)
-      {
-        logger.LogInformation("Request for {Operation} was canceled by the client.", operation);
-        context.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
+        context.Response.StatusCode = ex switch
+        {
+          DirectoryNotFoundException => StatusCodes.Status404NotFound,
+          UnauthorizedAccessException => StatusCodes.Status403Forbidden,
+          OperationCanceledException => StatusCodes.Status499ClientClosedRequest,
+          _ => StatusCodes.Status500InternalServerError
+        };
+        logger.LogError(ex, "Error in {Operation} with folder {Folder}", operation, CurrentStoragePath);
       }
       catch (Exception ex)
       {
-        logger.LogError(ex, "Unexpected error during {Operation} in {Folder} {error}", operation, sharedFolder, ex.StackTrace);
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-        await context.Response.WriteAsync("Internal server error.");
+        logger.LogError(ex, "Unexpected error in {Operation}: {Message}", operation, ex.Message);
       }
     }
 
 
-
-    app.MapGet("/files", (HttpContext context, ILogger<Program> logger) =>
-        SafeExecuteAsync(context, logger, async ctx =>
+    _app.MapGet("/files", (HttpContext ctx, ILogger<ServerHost> logger) =>
+        SafeExecuteAsync(ctx, logger, async context =>
         {
-          var files = Directory.GetFiles(sharedFolder)
-              .Select(Path.GetFileName)
-              .ToArray();
+          var files = Directory.GetFiles(CurrentStoragePath)
+                  .Select(Path.GetFileName)
+                  .ToArray();
 
-          ctx.Response.ContentType = "application/json";
-          await ctx.Response.WriteAsJsonAsync(files);
-        }, "list files")
-    );
+          context.Response.ContentType = "application/json";
+          await context.Response.WriteAsJsonAsync(files);
+        }, "list files"));
 
-    app.MapGet("/download/{filename}", (HttpContext context, string filename, ILogger<Program> logger) =>
-        SafeExecuteAsync(context, logger, async ctx =>
+    _app.MapGet("/download/{filename}", (HttpContext ctx, string filename, ILogger<ServerHost> logger) =>
+        SafeExecuteAsync(ctx, logger, async context =>
         {
-
-          logger.LogInformation("Request to download file: {Filename}", filename);
           var safeFileName = Path.GetFileName(filename);
-          var path = Path.Combine(sharedFolder, safeFileName);
+          var path = Path.Combine(CurrentStoragePath, safeFileName);
 
           if (!File.Exists(path))
           {
-            logger.LogWarning("404 File not found: {Filename}", safeFileName);
-            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
           }
 
@@ -121,74 +129,73 @@ public class ServerHost : IServerHost
             contentType = "application/octet-stream";
 
           var fileInfo = new FileInfo(path);
-          logger.LogInformation("/download/{Filename} → {Size} KB", safeFileName, fileInfo.Length / 1024);
+          context.Response.ContentType = contentType;
+          context.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFileName}\"";
+          context.Response.ContentLength = fileInfo.Length;
 
-          ctx.Response.ContentType = contentType;
-          ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFileName}\"";
-          ctx.Response.ContentLength = fileInfo.Length;
+          await context.Response.SendFileAsync(path, context.RequestAborted);
+        }, "download file"));
 
-          await ctx.Response.SendFileAsync(path, ctx.RequestAborted);
-        }, "download file")
-    );
-
-    app.MapGet("/download-folder/{folder}", (HttpContext context, string folder, ILogger<Program> logger) =>
-        SafeExecuteAsync(context, logger, async ctx =>
+    _app.MapPost("/upload", (HttpContext ctx, ILogger<ServerHost> logger) =>
+        SafeExecuteAsync(ctx, logger, async context =>
         {
-          var safeFolder = Path.GetFileName(folder);
-          var fullFolderPath = Path.Combine(sharedFolder, safeFolder);
-
-          if (!Directory.Exists(fullFolderPath))
+          var form = await context.Request.ReadFormAsync(context.RequestAborted);
+          var file = form.Files["file"];
+          if (file == null || file.Length == 0)
           {
-            logger.LogWarning("404 Folder not found: {Folder}", safeFolder);
-            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("No file uploaded");
             return;
           }
 
-          var tempZipPath = Path.Combine(Path.GetTempPath(), $"{safeFolder}_{Guid.NewGuid()}.zip");
-          ZipFile.CreateFromDirectory(fullFolderPath, tempZipPath);
+          var safeFileName = Path.GetFileName(file.FileName);
+          var filePath = Path.Combine(CurrentStoragePath, safeFileName);
 
-          logger.LogInformation("/download-folder/{Folder} → Sending zip", safeFolder);
+          await using var fileStream = file.OpenReadStream();
+          await using var localStream = File.Create(filePath);
 
-          ctx.Response.ContentType = "application/zip";
-          ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"{safeFolder}.zip\"";
-          await using var zipStream = File.OpenRead(tempZipPath);
-          await zipStream.CopyToAsync(ctx.Response.Body, 81920, ctx.RequestAborted);
+          await fileStream.CopyToAsync(localStream, context.RequestAborted);
 
-          File.Delete(tempZipPath);
-        }, "download folder")
-    );
+          context.Response.ContentType = "application/json";
+          await context.Response.WriteAsJsonAsync(new { file = safeFileName });
+        }, "upload file"));
 
-    app.MapPost("/upload", (HttpContext context, ILogger<Program> logger) =>
-      SafeExecuteAsync(context, logger, async ctx =>
-      {
-        var form = await ctx.Request.ReadFormAsync(context.RequestAborted);
-        var file = form.Files["file"];
-
-        if (file is null || file.Length == 0)
-        {
-          ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-          await ctx.Response.WriteAsync("No file uploaded");
-          return;
-        }
-
-        var safeFileName = Path.GetFileName(file.FileName);
-        var filePath = Path.Combine(sharedFolder, safeFileName);
-
-        await using var fileStream = file.OpenReadStream();
-        await using var localStream = File.Create(filePath);
-
-        await fileStream.CopyToAsync(localStream, ctx.RequestAborted);
-
-        logger.LogInformation("/upload → {Filename} ({Size} KB)", safeFileName, file.Length / 1024);
-
-        ctx.Response.ContentType = "application/json";
-        await ctx.Response.WriteAsJsonAsync(new { file = safeFileName });
-      }, "upload file")
-    );
+    _app.MapHealthChecks("/health");
 
 
-    app.MapHealthChecks("/health");
+    _serverTask = _app.RunAsync(_cts.Token);
+    Url = $"http://localhost:{_port}";
+    IsRunning = true;
 
-    await app.RunAsync(token);
+    await Task.Delay(200, token);
+  }
+
+  public async Task StopAsync()
+  {
+    if (!IsRunning || _app is null || _cts is null)
+      return;
+
+    _cts.Cancel();
+
+    try
+    {
+      await _serverTask!;
+    }
+    catch (OperationCanceledException) { }
+
+    IsRunning = false;
+    Url = null;
+  }
+
+  private static bool IsPortInUse(int port)
+  {
+    try
+    {
+      using var client = new TcpClient();
+      var task = client.ConnectAsync(IPAddress.Loopback, port);
+      var done = task.Wait(TimeSpan.FromMilliseconds(200));
+      return done && client.Connected;
+    }
+    catch { return false; }
   }
 }
