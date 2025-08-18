@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
+using System.Text.Json;
+using Filesfer.Server;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 using QRCoder;
@@ -13,14 +15,20 @@ RunApp(app);
 
 static WebApplication BuildApp(string[] args)
 {
-  var port = 5000;
+  var config = LoadOrCreateConfig();
+
+  var port = config.Port;
+  var sharedFolder = config.SharedFolder;
+
   var ip = GetLocalIPAddress();
   var url = $"http://{ip}:{port}";
 
-  ShowBanner();
   GenerateQrCode(url);
 
   var builder = WebApplication.CreateBuilder(args);
+
+  builder.Configuration["Port"] = port.ToString();
+  builder.Configuration["SharedFolderPath"] = sharedFolder;
 
   ConfigureKestrel(builder, port);
   ConfigureServices(builder);
@@ -30,6 +38,63 @@ static WebApplication BuildApp(string[] args)
   ValidateSharedFolder(builder);
 
   return app;
+}
+
+
+
+static AppConfig LoadOrCreateConfig()
+{
+  var configFile = Path.Combine(AppContext.BaseDirectory, "config.json");
+
+  if (File.Exists(configFile))
+  {
+    var json = File.ReadAllText(configFile);
+    var cfg = JsonSerializer.Deserialize<AppConfig>(json);
+    if (cfg != null)
+      return cfg;
+  }
+
+  var port = GetPortFromUser();
+  var sharedFolder = GetSharedFolderFromUser();
+
+  var config = new AppConfig(port, sharedFolder);
+
+  // one time load
+#pragma warning disable CA1869 // Cache and reuse 'JsonSerializerOptions' instances
+  JsonSerializerOptions options = new()
+  {
+    WriteIndented = true
+  };
+#pragma warning restore CA1869 // Cache and reuse 'JsonSerializerOptions' instances
+
+  File.WriteAllText(configFile, JsonSerializer.Serialize(config, options));
+
+  return config;
+}
+
+static int GetPortFromUser()
+{
+  var port = AnsiConsole.Ask<int?>("[yellow]Enter port number (default: 5000):[/]", null);
+  return port.HasValue && port.Value > 0 ? port.Value : 5000;
+}
+
+static string GetSharedFolderFromUser()
+{
+  var defaultDownloads = Path.Combine(
+      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+      "Downloads"
+  );
+
+  var folder = AnsiConsole.Ask<string>(
+      $"[yellow]Enter shared folder path (default: {defaultDownloads}):[/]",
+      defaultDownloads
+  );
+
+  if (string.IsNullOrWhiteSpace(folder))
+    folder = defaultDownloads;
+
+  Directory.CreateDirectory(folder);
+  return folder;
 }
 
 
@@ -127,12 +192,17 @@ static void ConfigureEndpoints(WebApplication app)
 
 static void RunApp(WebApplication app)
 {
-  var port = 5000;
+  var port = app.Configuration.GetValue<int>("Port");
+  var sharedFolder = app.Configuration["SharedFolderPath"] ?? "Unknown";
+
   var ip = GetLocalIPAddress();
   var url = $"http://{ip}:{port}";
   var qrFile = Path.Combine(AppContext.BaseDirectory, "qrcode.png");
 
+  AnsiConsole.Write(new Rule("[yellow]Filesfer Server[/]").RuleStyle("green").Centered());
+  AnsiConsole.MarkupLine("[blue]Welcome to the Filesfer Server![/]");
   AnsiConsole.MarkupLine($"\n[green]Server running at:[/] [blue]{url}[/]");
+  AnsiConsole.MarkupLine($"[green]Files are being served from:[/] [blue]{sharedFolder}[/]");
   AnsiConsole.MarkupLine($"[yellow]QR Code saved at:[/] {qrFile}");
   AnsiConsole.MarkupLine("[grey]Scan this QR with your phone to connect directly.[/]\n");
 
@@ -143,7 +213,6 @@ static void RunApp(WebApplication app)
 
   app.Run();
 }
-
 
 static void ConfigureKestrel(WebApplicationBuilder builder, int port)
 {
@@ -232,14 +301,6 @@ static void GenerateQrCode(string url)
   var qrBytes = qrCode.GetGraphic(20);
 
   File.WriteAllBytes(qrFile, qrBytes);
-}
-
-
-static void ShowBanner()
-{
-  var rule = new Rule("[yellow]Filesfer Server[/]").RuleStyle("green").Centered();
-  AnsiConsole.Write(rule);
-  AnsiConsole.MarkupLine("[blue]Welcome to the Filesfer Server![/]");
 }
 
 
