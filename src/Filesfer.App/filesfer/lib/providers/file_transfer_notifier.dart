@@ -5,16 +5,16 @@ import 'package:filesfer/models/file_transfer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:filesfer/providers/providers.dart';
 import 'package:uuid/uuid.dart';
-
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 final fileTransferNotifierProvider =
     StateNotifierProvider<FileTransferNotifier, List<FileTransfer>>((ref) {
-  return FileTransferNotifier(ref);
-});
+      return FileTransferNotifier(ref);
+    });
 
 class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
   final Ref ref;
-  final int maxConcurrentTransfers = 10; 
+  final int maxConcurrentTransfers = 10;
   final Uuid _uuid = const Uuid();
 
   FileTransferNotifier(this.ref) : super([]);
@@ -44,25 +44,34 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
   }
 
   Future<void> _startNextTransfer() async {
-    final activeTransfers =
-        state.where((t) => t.status == TransferStatus.inProgress);
+    final activeTransfers = state.where(
+      (t) => t.status == TransferStatus.inProgress,
+    );
     if (activeTransfers.length >= maxConcurrentTransfers) return;
 
-    final pendingTransfer =
-        state.firstWhereOrNull((t) => t.status == TransferStatus.pending);
-    if (pendingTransfer == null) return;
+    final pendingTransfer = state.firstWhereOrNull(
+      (t) => t.status == TransferStatus.pending,
+    );
+    
+    if (pendingTransfer == null) {
+      _maybeDisableWakelock();
+      return;
+    }
 
     _updateTransferStatus(pendingTransfer.id, TransferStatus.inProgress);
 
+    await WakelockPlus.enable();
     final fileService = ref.read(fileServiceProvider);
-    
+
     final operation = pendingTransfer.isDownload
         ? fileService.downloadFile(
             pendingTransfer.filename,
             pendingTransfer.saveDir ?? '',
             onProgress: (bytesReceived, totalBytes) {
               _updateTransferProgress(
-                  pendingTransfer.id, bytesReceived / totalBytes);
+                pendingTransfer.id,
+                bytesReceived / totalBytes,
+              );
             },
             cancelToken: pendingTransfer.cancelToken,
           )
@@ -70,7 +79,9 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
             File(pendingTransfer.localPath!),
             onProgress: (bytesSent, totalBytes) {
               _updateTransferProgress(
-                  pendingTransfer.id, bytesSent / totalBytes);
+                pendingTransfer.id,
+                bytesSent / totalBytes,
+              );
             },
             cancelToken: pendingTransfer.cancelToken,
           );
@@ -79,7 +90,7 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
       final isSuccess = await operation;
       if (isSuccess) {
         _updateTransferStatus(pendingTransfer.id, TransferStatus.completed);
-        ref.invalidate(fileListProvider); 
+        ref.invalidate(fileListProvider);
       } else {
         _updateTransferStatus(pendingTransfer.id, TransferStatus.cancelled);
       }
@@ -87,13 +98,20 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
       if (CancelToken.isCancel(e)) {
         _updateTransferStatus(pendingTransfer.id, TransferStatus.cancelled);
       } else {
-        _updateTransferStatus(pendingTransfer.id, TransferStatus.failed,
-            errorMessage: e.message);
+        _updateTransferStatus(
+          pendingTransfer.id,
+          TransferStatus.failed,
+          errorMessage: e.message,
+        );
       }
     } catch (e) {
-      _updateTransferStatus(pendingTransfer.id, TransferStatus.failed,
-          errorMessage: e.toString());
+      _updateTransferStatus(
+        pendingTransfer.id,
+        TransferStatus.failed,
+        errorMessage: e.toString(),
+      );
     } finally {
+      _maybeDisableWakelock();
       _startNextTransfer();
     }
   }
@@ -101,25 +119,42 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
   void _updateTransferProgress(String id, double progress) {
     state = [
       for (final t in state)
-        if (t.id == id) t..progress = progress else t
+        if (t.id == id) t..progress = progress else t,
     ];
   }
 
-  void _updateTransferStatus(String id, TransferStatus newStatus,
-      {String? errorMessage}) {
+  void _updateTransferStatus(
+    String id,
+    TransferStatus newStatus, {
+    String? errorMessage,
+  }) {
     state = [
       for (final t in state)
-        if (t.id == id) t..status = newStatus..errorMessage = errorMessage else t
+        if (t.id == id)
+          t
+            ..status = newStatus
+            ..errorMessage = errorMessage
+        else
+          t,
     ];
   }
-  
+
+  void _maybeDisableWakelock() {
+    final hasActiveTransfers = state.any(
+      (t) => t.status == TransferStatus.inProgress,
+    );
+    if (!hasActiveTransfers) {
+      WakelockPlus.disable();
+    }
+  }
+
   void removeTransfer(String id) {
     state = [
       for (final t in state)
-        if (t.id != id) t
+        if (t.id != id) t,
     ];
   }
-  
+
   void cancelTransfer(String id) {
     final transfer = state.firstWhereOrNull((t) => t.id == id);
     if (transfer != null && transfer.status == TransferStatus.inProgress) {
