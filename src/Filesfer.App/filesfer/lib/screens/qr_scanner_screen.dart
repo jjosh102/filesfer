@@ -14,6 +14,8 @@ class QRScannerScreen extends ConsumerStatefulWidget {
 class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
   final MobileScannerController controller = MobileScannerController();
 
+  bool _isProcessing = false;
+
   Future<void> _uploadFromGallery() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
@@ -22,8 +24,9 @@ class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
       final barcode = await controller.analyzeImage(image.path);
       if (barcode!.barcodes.isNotEmpty && barcode.barcodes.first.rawValue != null) {
         final code = barcode.barcodes.first.rawValue!;
-    
+      
         ref.read(qrCodeProvider.notifier).state = code;
+      
         if (mounted) {
           Navigator.pop(context);
         }
@@ -48,12 +51,17 @@ class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
           MobileScanner(
             controller: controller,
             onDetect: (capture) {
+              if (_isProcessing) return; 
+
               final List<Barcode> barcodes = capture.barcodes;
               if (barcodes.isNotEmpty) {
                 final code = barcodes.first.rawValue;
                 if (code != null) {
-              
+                  _isProcessing = true;
+                  
+                  controller.stop();
                   ref.read(qrCodeProvider.notifier).state = code;
+                  
                   if (mounted) {
                     Navigator.pop(context);
                   }
@@ -71,40 +79,44 @@ class _QRScannerScreenState extends ConsumerState<QRScannerScreen> {
               ),
             ),
           ),
-          Positioned(
-            bottom: 24,
-            left: 0,
-            right: 0,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          SafeArea(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                ElevatedButton.icon(
-                  onPressed: () {
-                    controller.start();
-                  },
-                  icon: const Icon(Icons.camera_alt),
-                  label: const Text('Scan'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 24.0),
+                  child: Text(
+                    'Scan QR code or upload from your gallery.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          backgroundColor: Colors.black54,
+                        ),
+                  ),
                 ),
-                ElevatedButton.icon(
-                  onPressed: _uploadFromGallery,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Upload'),
+                const Spacer(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 48.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          _isProcessing = false; 
+                          controller.start();
+                        },
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Scan'),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _uploadFromGallery,
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Upload'),
+                      ),
+                    ],
+                  ),
                 ),
               ],
-            ),
-          ),
-          Positioned.fill(
-            top: 24,
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: Text(
-                'Scan  QR code or upload from your gallery.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                      backgroundColor: Colors.black54,
-                    ),
-              ),
             ),
           ),
         ],
