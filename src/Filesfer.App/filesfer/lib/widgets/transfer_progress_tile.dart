@@ -1,3 +1,4 @@
+
 import 'package:filesfer/providers/file_transfer_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,6 +21,27 @@ class TransferProgressTile extends ConsumerWidget {
     }
   }
 
+  String _formatETA(double progress, double speedInBytesPerSecond, int totalBytes) {
+    if (progress <= 0 || speedInBytesPerSecond <= 0) {
+      return '...';
+    }
+
+    final remainingBytes = totalBytes * (1 - progress);
+    final remainingSeconds = remainingBytes / speedInBytesPerSecond;
+
+    if (remainingSeconds < 60) {
+      return '${remainingSeconds.toStringAsFixed(0)}s';
+    } else if (remainingSeconds < 3600) {
+      final minutes = remainingSeconds ~/ 60;
+      final seconds = (remainingSeconds % 60).toStringAsFixed(0);
+      return '${minutes}m ${seconds}s';
+    } else {
+      final hours = remainingSeconds ~/ 3600;
+      final minutes = ((remainingSeconds % 3600) ~/ 60).toStringAsFixed(0);
+      return '${hours}h ${minutes}m';
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     IconData icon;
@@ -31,7 +53,9 @@ class TransferProgressTile extends ConsumerWidget {
         icon = Icons.sync_rounded;
         color = Colors.blue;
         final speedText = _formatSpeed(transfer.speed);
-        statusText = '${(transfer.progress * 100).toStringAsFixed(1)}% ($speedText)';
+
+        final etaText = _formatETA(transfer.progress, transfer.speed, transfer.totalBytes);
+        statusText = '${(transfer.progress * 100).toStringAsFixed(1)}% ($speedText) ETA: $etaText';
         break;
       case TransferStatus.completed:
         icon = Icons.check_circle_outline;

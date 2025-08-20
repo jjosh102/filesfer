@@ -138,6 +138,7 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
               progress: bytesTransferred / totalBytes,
               speed: _calculateSpeed(t, bytesTransferred),
               lastBytes: bytesTransferred,
+              totalBytes: totalBytes,
               lastUpdateTime: DateTime.now(),
               lastUIUpdate: DateTime.now(),
             )

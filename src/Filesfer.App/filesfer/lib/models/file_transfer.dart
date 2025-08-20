@@ -1,12 +1,6 @@
 import 'package:dio/dio.dart';
 
-enum TransferStatus {
-  pending,
-  inProgress,
-  completed,
-  failed,
-  cancelled,
-}
+enum TransferStatus { pending, inProgress, completed, failed, cancelled }
 
 class FileTransfer {
   final String id;
@@ -20,6 +14,7 @@ class FileTransfer {
   final String? errorMessage;
   final double speed;
   final int lastBytes;
+  final int totalBytes;
   final DateTime lastUpdateTime;
   final DateTime lastUIUpdate;
 
@@ -35,10 +30,11 @@ class FileTransfer {
     this.errorMessage,
     this.speed = 0.0,
     this.lastBytes = 0,
+    this.totalBytes = 0,
     DateTime? lastUpdateTime,
     DateTime? lastUIUpdate,
-  })  : lastUpdateTime = lastUpdateTime ?? DateTime.now(),
-        lastUIUpdate = lastUIUpdate ?? DateTime.now();
+  }) : lastUpdateTime = lastUpdateTime ?? DateTime.now(),
+       lastUIUpdate = lastUIUpdate ?? DateTime.now();
 
   FileTransfer copyWith({
     String? id,
@@ -52,6 +48,7 @@ class FileTransfer {
     String? errorMessage,
     double? speed,
     int? lastBytes,
+    int? totalBytes,
     DateTime? lastUpdateTime,
     DateTime? lastUIUpdate,
   }) {
@@ -67,6 +64,7 @@ class FileTransfer {
       errorMessage: errorMessage ?? this.errorMessage,
       speed: speed ?? this.speed,
       lastBytes: lastBytes ?? this.lastBytes,
+      totalBytes: totalBytes ?? this.totalBytes,
       lastUpdateTime: lastUpdateTime ?? this.lastUpdateTime,
       lastUIUpdate: lastUIUpdate ?? this.lastUIUpdate,
     );
