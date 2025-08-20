@@ -9,13 +9,14 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 final fileTransferNotifierProvider =
     StateNotifierProvider<FileTransferNotifier, List<FileTransfer>>((ref) {
-      return FileTransferNotifier(ref);
-    });
+  return FileTransferNotifier(ref);
+});
 
 class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
   final Ref ref;
   final int maxConcurrentTransfers = 10;
   final Uuid _uuid = const Uuid();
+  static const Duration _updateInterval = Duration(milliseconds: 500);
 
   FileTransferNotifier(this.ref) : super([]);
 
@@ -52,13 +53,16 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
     final pendingTransfer = state.firstWhereOrNull(
       (t) => t.status == TransferStatus.pending,
     );
-    
+
     if (pendingTransfer == null) {
       _maybeDisableWakelock();
       return;
     }
 
-    _updateTransferStatus(pendingTransfer.id, TransferStatus.inProgress);
+    _updateTransferState(
+      pendingTransfer.id,
+      (t) => t.copyWith(status: TransferStatus.inProgress),
+    );
 
     await WakelockPlus.enable();
     final fileService = ref.read(fileServiceProvider);
@@ -70,7 +74,8 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
             onProgress: (bytesReceived, totalBytes) {
               _updateTransferProgress(
                 pendingTransfer.id,
-                bytesReceived / totalBytes,
+                bytesReceived,
+                totalBytes,
               );
             },
             cancelToken: pendingTransfer.cancelToken,
@@ -80,7 +85,8 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
             onProgress: (bytesSent, totalBytes) {
               _updateTransferProgress(
                 pendingTransfer.id,
-                bytesSent / totalBytes,
+                bytesSent,
+                totalBytes,
               );
             },
             cancelToken: pendingTransfer.cancelToken,
@@ -89,26 +95,33 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
     try {
       final isSuccess = await operation;
       if (isSuccess) {
-        _updateTransferStatus(pendingTransfer.id, TransferStatus.completed);
+        _updateTransferState(
+          pendingTransfer.id,
+          (t) => t.copyWith(status: TransferStatus.completed, progress: 1.0),
+        );
         ref.invalidate(fileListProvider);
       } else {
-        _updateTransferStatus(pendingTransfer.id, TransferStatus.cancelled);
+        _updateTransferState(
+          pendingTransfer.id,
+          (t) => t.copyWith(status: TransferStatus.cancelled),
+        );
       }
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
-        _updateTransferStatus(pendingTransfer.id, TransferStatus.cancelled);
-      } else {
-        _updateTransferStatus(
+        _updateTransferState(
           pendingTransfer.id,
-          TransferStatus.failed,
-          errorMessage: e.message,
+          (t) => t.copyWith(status: TransferStatus.cancelled),
+        );
+      } else {
+        _updateTransferState(
+          pendingTransfer.id,
+          (t) => t.copyWith(status: TransferStatus.failed, errorMessage: e.message),
         );
       }
     } catch (e) {
-      _updateTransferStatus(
+      _updateTransferState(
         pendingTransfer.id,
-        TransferStatus.failed,
-        errorMessage: e.toString(),
+        (t) => t.copyWith(status: TransferStatus.failed, errorMessage: e.toString()),
       );
     } finally {
       _maybeDisableWakelock();
@@ -116,24 +129,43 @@ class FileTransferNotifier extends StateNotifier<List<FileTransfer>> {
     }
   }
 
-  void _updateTransferProgress(String id, double progress) {
-    state = [
-      for (final t in state)
-        if (t.id == id) t..progress = progress else t,
-    ];
-  }
-
-  void _updateTransferStatus(
-    String id,
-    TransferStatus newStatus, {
-    String? errorMessage,
-  }) {
+  void _updateTransferProgress(String id, int bytesTransferred, int totalBytes) {
     state = [
       for (final t in state)
         if (t.id == id)
-          t
-            ..status = newStatus
-            ..errorMessage = errorMessage
+          if (DateTime.now().difference(t.lastUIUpdate) >= _updateInterval)
+            t.copyWith(
+              progress: bytesTransferred / totalBytes,
+              speed: _calculateSpeed(t, bytesTransferred),
+              lastBytes: bytesTransferred,
+              lastUpdateTime: DateTime.now(),
+              lastUIUpdate: DateTime.now(),
+            )
+          else
+            t
+        else
+          t,
+    ];
+  }
+
+  double _calculateSpeed(FileTransfer transfer, int currentBytes) {
+    final now = DateTime.now();
+    final timeElapsed = now.difference(transfer.lastUpdateTime).inMilliseconds / 1000.0;
+    
+    if (timeElapsed == 0 || transfer.lastBytes == currentBytes) {
+      return transfer.speed;
+    }
+
+    final bytesSinceLastUpdate = currentBytes - transfer.lastBytes;
+    final speedInBytesPerSecond = bytesSinceLastUpdate / timeElapsed;
+    return speedInBytesPerSecond;
+  }
+
+  void _updateTransferState(String id, FileTransfer Function(FileTransfer) update) {
+    state = [
+      for (final t in state)
+        if (t.id == id)
+          update(t)
         else
           t,
     ];

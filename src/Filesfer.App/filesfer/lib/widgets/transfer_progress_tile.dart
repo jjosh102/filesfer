@@ -8,6 +8,18 @@ class TransferProgressTile extends ConsumerWidget {
 
   const TransferProgressTile({super.key, required this.transfer});
 
+  String _formatSpeed(double speedInBytesPerSecond) {
+    if (speedInBytesPerSecond >= 1000000) {
+      return '${(speedInBytesPerSecond / 1000000).toStringAsFixed(2)} MB/s';
+    } else if (speedInBytesPerSecond >= 1000) {
+      return '${(speedInBytesPerSecond / 1000).toStringAsFixed(2)} KB/s';
+    } else if (speedInBytesPerSecond > 0) {
+      return '${speedInBytesPerSecond.toStringAsFixed(0)} B/s';
+    } else {
+      return 'Calculating...';
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     IconData icon;
@@ -18,8 +30,8 @@ class TransferProgressTile extends ConsumerWidget {
       case TransferStatus.inProgress:
         icon = Icons.sync_rounded;
         color = Colors.blue;
-        statusText =
-            '${(transfer.progress * 100).toStringAsFixed(1)}% - In Progress';
+        final speedText = _formatSpeed(transfer.speed);
+        statusText = '${(transfer.progress * 100).toStringAsFixed(1)}% ($speedText)';
         break;
       case TransferStatus.completed:
         icon = Icons.check_circle_outline;
@@ -50,18 +62,21 @@ class TransferProgressTile extends ConsumerWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: LinearProgressIndicator(
-        value: transfer.status == TransferStatus.inProgress ||
-                transfer.status == TransferStatus.pending
-            ? transfer.progress
-            : 1.0,
-        valueColor: AlwaysStoppedAnimation<Color>(color),
-        backgroundColor: color.withValues(alpha: 0.2),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LinearProgressIndicator(
+            value: transfer.progress,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+            backgroundColor: color.withValues(alpha: 0.2),
+          ),
+          const SizedBox(height: 4),
+          Text(statusText, style: TextStyle(color: color, fontSize: 12)),
+        ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(statusText, style: TextStyle(color: color, fontSize: 12)),
           if (transfer.status == TransferStatus.inProgress)
             IconButton(
               icon: const Icon(Icons.close),
