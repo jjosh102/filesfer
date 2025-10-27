@@ -22,6 +22,7 @@ export class FileService {
 
       map(response => {
         const body = response.body;
+        console.log('HTTP Response Body:', body);
         const data: T =
           (body as { data?: T })?.data !== undefined
             ? (body as { data?: T }).data as T

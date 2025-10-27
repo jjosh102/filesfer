@@ -103,6 +103,7 @@ static void ConfigureEndpoints(WebApplication app)
   var sharedFolder = app.Configuration["SharedFolderPath"];
   var provider = new FileExtensionContentTypeProvider();
 
+
   app.MapGet("/files", (HttpContext ctx, ILogger<Program> logger) =>
       SafeExecuteAsync(ctx, logger, async c =>
       {
@@ -187,6 +188,7 @@ static void ConfigureEndpoints(WebApplication app)
       }, "upload file"));
 
   app.MapHealthChecks("/health");
+  app.UseCors();
 }
 
 
@@ -243,6 +245,16 @@ static void ConfigureServices(WebApplicationBuilder builder)
   builder.Logging.AddProvider(new SpectreLoggerProvider());
 
   builder.Services.AddHealthChecks();
+  builder.Services.AddCors(options =>
+{
+  options.AddDefaultPolicy(policy =>
+  {
+    policy
+          .AllowAnyOrigin()
+          .AllowAnyMethod()
+          .AllowAnyHeader();
+  });
+});
 }
 
 
