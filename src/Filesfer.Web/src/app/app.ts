@@ -1,30 +1,46 @@
-import { Component, DestroyRef, inject, OnInit, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { FileService } from './services/file.service';
+
+import { CommonModule } from '@angular/common';
+import { DownloadDialog } from './components/download-dialog/download-dialog';
 
 @Component({
   selector: 'app-root',
+  standalone: true,
+  imports: [CommonModule, DownloadDialog],
   templateUrl: './app.html',
-  styleUrl: './app.css'
+  styleUrls: ['./app.css']
 })
 export class App implements OnInit {
-  protected readonly title = signal('Filesfer.Web');
-  private fileService = inject(FileService);
-  private destroyRef = inject(DestroyRef);
+  readonly title = signal('Filesfer');
+  private readonly fileService = inject(FileService);
+  private readonly destroyRef = inject(DestroyRef);
+
   files = signal<string[]>([]);
+  activeDownload = signal<string | null>(null);
+  isRefreshing = signal(false);
 
-  ngOnInit() {
-    const subscription = this.fileService.getFileList()
-      .subscribe({
-        next: (result) => {
-          if (result) {
-            this.files.set(result);
-          }
-        }
-      },);
+  ngOnInit(): void {
+    this.loadFiles();
+  }
 
-    this.destroyRef.onDestroy(() => {
-      subscription.unsubscribe();
+  private loadFiles(): void {
+    const sub = this.fileService.getFileList().subscribe({
+      next: result => this.files.set(result ?? []),
+      error: err => console.error('Failed to load files:', err)
     });
+    this.destroyRef.onDestroy(() => sub.unsubscribe());
+  }
+
+  triggerRefresh(): void {
+    this.isRefreshing.set(true);
+    setTimeout(() => {
+      this.loadFiles();
+      this.isRefreshing.set(false);
+    }, 800);
+  }
+
+  startDownload(filename: string): void {
+    this.activeDownload.set(filename);
   }
 }

@@ -1,0 +1,41 @@
+<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" (click)="close()">
+  <div
+    class="bg-white p-6 rounded-2xl shadow-xl w-80 sm:w-96 text-gray-800 relative"
+    (click)="$event.stopPropagation()">
+
+    <h2 class="text-lg font-semibold mb-3 text-center">
+      Downloading {{ filename() }}
+    </h2>
+
+    @if (stats().errorMessage) {
+      <div class="text-red-600 text-center mb-3">{{ stats().errorMessage }}</div>
+    } @else if (stats().downloading) {
+      <div class="w-full bg-gray-200 h-3 rounded-full mb-3 overflow-hidden">
+        <div class="bg-blue-600 h-3 transition-all duration-200"
+             [style.width.%]="stats().progress"></div>
+      </div>
+
+      <div class="text-sm text-gray-600 flex justify-between mb-1">
+        <span>{{ stats().progress }}%</span>
+        <span>{{ stats().eta }}</span>
+      </div>
+
+      <div class="text-xs text-gray-500 text-center">
+        {{ (stats().downloadedBytes / 1024 / 1024) | number:'1.2-2' }} MB /
+        {{ (stats().totalBytes / 1024 / 1024) | number:'1.2-2' }} MB
+        ({{ (stats().speed / 1024) | number:'1.0-0' }} KB/s)
+      </div>
+    } @else {
+      <div class="text-green-600 text-center mb-3 font-medium">
+        Download complete
+      </div>
+      <div class="flex justify-center">
+        <button
+          class="px-3 py-1.5 bg-gray-800 text-white rounded-md text-sm hover:bg-gray-900"
+          (click)="close()">
+          Close
+        </button>
+      </div>
+    }
+  </div>
+</div>

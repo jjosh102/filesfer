@@ -1,45 +1,52 @@
 <main class="flex flex-col min-h-screen bg-gray-50 text-gray-900">
-    <header class="w-full shadow-sm bg-white px-8 py-4 flex items-center justify-between">
-      <h1 class="text-2xl font-semibold tracking-tight">Filesfer</h1>
 
-      <div class="flex items-center gap-3">
-        <button class="px-3 py-1.5 rounded-md text-sm bg-blue-600 text-white hover:bg-blue-700">
-          Upload
-        </button>
-        <button class="px-3 py-1.5 rounded-md text-sm bg-gray-200 hover:bg-gray-300">
-          Refresh
-        </button>
-      </div>
-    </header>
-
-    <nav class="flex border-b bg-white px-8">
-      <button class="px-4 py-2 text-sm font-medium border-b-2 border-blue-600 text-blue-600">Files</button>
-      <button class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-800">Transfers</button>
-    </nav>
-
-    <section class="flex-1 p-8 overflow-y-auto">
-      @if (files().length === 0) {
-        <div class="text-center text-gray-500 mt-20 text-sm">No files available</div>
+  <header class="w-full shadow-sm bg-white px-6 py-4 flex items-center justify-between">
+    <h1 class="text-xl sm:text-2xl font-semibold tracking-tight">Filesfer</h1>
+    <button
+      class="px-3 py-1.5 rounded-md text-sm flex items-center gap-2 bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+      [disabled]="isRefreshing()" (click)="triggerRefresh()">
+      @if (isRefreshing()) {
+      <span class="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></span>
+      <span>Refreshing...</span>
       } @else {
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          @for (file of files(); track file) {
-            <div class="p-4 bg-white rounded-xl shadow-sm hover:shadow-md transition flex flex-col items-center text-center">
-              <div class="w-16 h-16 flex items-center justify-center bg-gray-100 rounded-lg text-gray-500 text-sm font-semibold">
-                {{file }}
-              </div>
-              <div class="mt-3 w-full truncate text-sm font-medium">{{ file }}</div>
-              <div class="text-xs text-gray-400">placeholder • -- KB</div>
-              <div class="mt-2 flex gap-2">
-                <button class="px-2 py-1 text-xs bg-green-600 text-white rounded-md">Download</button>
-                <button class="px-2 py-1 text-xs bg-gray-200 rounded-md">Open</button>
-              </div>
-            </div>
-          }
-        </div>
+      <span>↻</span>
+      <span>Refresh</span>
       }
-    </section>
+    </button>
+  </header>
 
-    <footer class="p-4 text-xs text-center text-gray-400">
-      Filesfer Placeholder • Angular + Tailwind
-    </footer>
-  </main>
+  <section class="flex-1 p-4 sm:p-6 overflow-y-auto">
+    @if (files().length === 0) {
+    <div class="text-center text-gray-500 mt-20 text-sm">No files found in the shared folder</div>
+    } @else {
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4">
+      @for (file of files(); track file) {
+      <div class="p-4 bg-white rounded-xl shadow-sm hover:shadow-md transition flex flex-col items-center text-center">
+        <div
+          class="w-16 h-16 flex items-center justify-center bg-gray-100 rounded-lg text-gray-500 text-xs font-semibold truncate px-1">
+          {{ file }}
+        </div>
+        <div class="mt-3 w-full truncate text-sm font-medium">{{ file }}</div>
+        <div class="text-xs text-gray-400">Available for download</div>
+        <div class="mt-2 flex gap-2">
+          <button class="flex-1 px-2 py-1 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            (click)="startDownload(file)">
+            Download
+          </button>
+        </div>
+      </div>
+      }
+    </div>
+    }
+  </section>
+
+
+  @if (activeDownload()) {
+  <app-download-dialog [filename]="activeDownload()!" (closed)="activeDownload.set(null)">
+  </app-download-dialog>
+  }
+
+  <footer class="p-3 text-[11px] sm:text-xs text-center text-gray-400 border-t">
+    Filesfer • Local File Sharing App
+  </footer>
+</main>
