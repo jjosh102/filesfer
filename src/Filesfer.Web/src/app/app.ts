@@ -3,11 +3,12 @@ import { FileService } from './services/file.service';
 
 import { CommonModule } from '@angular/common';
 import { DownloadDialog } from './components/download-dialog/download-dialog';
+import { FileItem } from './components/file-item/file-item';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, DownloadDialog],
+  imports: [CommonModule, DownloadDialog, FileItem],
   templateUrl: './app.html',
   styleUrls: ['./app.css']
 })
@@ -19,6 +20,7 @@ export class App implements OnInit {
   files = signal<string[]>([]);
   activeDownload = signal<string | null>(null);
   isRefreshing = signal(false);
+  isGridView = signal(true);
 
   ngOnInit(): void {
     this.loadFiles();
@@ -42,5 +44,9 @@ export class App implements OnInit {
 
   startDownload(filename: string): void {
     this.activeDownload.set(filename);
+  }
+
+  toggleViewMode() {
+    this.isGridView.update(v => !v);
   }
 }
